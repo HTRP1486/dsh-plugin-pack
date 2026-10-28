@@ -890,7 +890,11 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           state.error ? h(Alert, { kind: 'err' }, state.error) : null,
           busy ? h('div', { className: 'pp-empty' }, h(Spinner, { label: translate('loading') })) : null,
           !busy &&
-            state.items.map((item, index) =>
+            state.items
+              // 选目录模式下不列文件：用户是在挑"导出到哪儿"，
+              // 列出 .tgz/.zip 只会让人以为能选压缩包（实际会被当成目录名）。
+              .filter((item) => !pickingDir || item.dir)
+              .map((item, index) =>
               h(
                 'div',
                 {
@@ -950,20 +954,28 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                   : h('span', { className: 'pp-side' }, `${(item.size / 1048576).toFixed(1)} MiB`),
                 item.dir
                   ? null
-                  : h(
-                      'button',
-                      {
-                        className: 'pp-btn sm',
-                        onClick: (event) => {
-                          event.stopPropagation();
-                          onPick(item.path);
+                  : pickingDir
+                    ? null
+                    : h(
+                        'button',
+                        {
+                          className: 'pp-btn sm',
+                          onClick: (event) => {
+                            event.stopPropagation();
+                            onPick(item.path);
+                          },
                         },
-                      },
-                      '选它',
-                    ),
+                        '选它',
+                      ),
               ),
             ),
-          !busy && !state.items.length && !state.error ? h('div', { className: 'pp-empty' }, '空目录（这里没有子目录，也没有 zip）') : null,
+          !busy && !state.items.length && !state.error
+            ? h(
+                'div',
+                { className: 'pp-empty' },
+                pickingDir ? '空目录（这里没有子目录）' : '空目录（这里没有子目录，也没有 zip）',
+              )
+            : null,
         ),
         // 底部
         h(

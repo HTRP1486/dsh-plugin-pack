@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { parseMultipart, boundaryOf, saveIncomingZip, saveIncomingDir, pruneInbox } from '../lib/inbox.js';
@@ -235,4 +236,24 @@ test('listRoots 在 Windows 上返回可用盘符', () => {
     assert.ok(roots.some((root) => /^[A-Z]:\\$/.test(root.path)), `应至少有一个盘符，实际 ${JSON.stringify(roots)}`);
     assert.ok(roots.some((root) => root.path.toUpperCase() === 'C:\\'), '应有 C:\\');
   }
+});
+
+test('选目录模式不列文件：避免用户以为能选压缩包', () => {
+  // 界面按 pickingDir 过滤掉了文件项；这里验证源码里的过滤逻辑存在，
+  // 并确认 dir 模式下文件的「选它」按钮也被抑制。
+  const clientFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'client.js');
+  const src = fs.readFileSync(clientFile, 'utf8');
+
+  // 列表过滤：pickingDir 时只保留 item.dir
+  assert.ok(
+    /filter\(\(item\) => !pickingDir \|\| item\.dir\)/.test(src),
+    '选目录模式应过滤掉文件',
+  );
+  // 文件行的选它按钮在 dir 模式下不渲染
+  assert.ok(
+    /: pickingDir\s*\?\s*null\s*:\s*h\(\s*'button'/.test(src),
+    'dir 模式下不应给文件渲染「选它」按钮',
+  );
+  // 空目录提示按模式区分文案
+  assert.ok(src.includes('空目录（这里没有子目录）'), 'dir 模式空目录提示不该提 zip');
 });
