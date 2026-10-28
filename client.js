@@ -108,6 +108,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.source.bundle': '整合包',
     'import.source.plugin': '本地插件',
     'import.notBundle': 'zip 不是整合包',
+    'import.reading': '正在读取包内容…',
+    'import.uploading': '正在上传…',
+    'import.checking': '正在检查冲突…',
     'drop.title': '把 zip / tgz 或插件文件夹拖到这里',
     'drop.release': '松手就导入',
     'drop.running': '正在导入…',
@@ -266,6 +269,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.source.bundle': 'Bundle',
     'import.source.plugin': 'Local plugin',
     'import.notBundle': 'This zip is not a bundle',
+    'import.reading': 'Reading package contents…',
+    'import.uploading': 'Uploading…',
+    'import.checking': 'Checking for conflicts…',
     'drop.title': 'Drop a zip / tgz or plugin folder here',
     'drop.release': 'Release to import',
     'drop.running': 'Importing…',
@@ -487,6 +493,135 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
   const getWaiting = () => api('/plugin-pack/waiting');
   const cancelWaiting = (id, reason) =>
     api('/plugin-pack/waiting/cancel', { method: 'POST', body: JSON.stringify({ id, reason }) });
+
+  /* ------------------------- 浏览器端读 zip 头部 ------------------------- */
+
+  /**
+   * 只读 zip 的中央目录，取出条目名（不解压内容）。
+   *
+   * 为什么在浏览器里做：拖入一个几百 MB 的包，原来的流程是
+   * 「整个文件 POST 上去 → 服务端 dryRun → 才弹冲突窗」，
+   * 用户要等上传完才看到"哪些要覆盖"。
+   *
+   * zip 的中央目录在文件尾部（最后 22 字节是 EOCD，里面记着目录偏移），
+   * 所以只读尾部 ~1 MB 就能得到全部条目名，不用传整个文件。
+   * 这样拖进来几百毫秒就能弹出冲突列表，点确认之后才真正上传。
+   *
+   * @param {File} file
+   * @returns {Promise<{ names: string[], manifest: any | null } | null>}
+   *   不是有效 zip 时返回 null（交给服务端给出正式错误）
+   */
+  async function peekZip(file) {
+    try {
+      const size = file.size;
+      if (size < 22) return null;
+
+      // 1) 读尾部，找 EOCD
+      const tailLen = Math.min(size, 2 * 1024 * 1024);
+      const tail = new Uint8Array(await file.slice(size - tailLen).arrayBuffer());
+      let eocd = -1;
+      for (let i = tail.length - 22; i >= 0; i -= 1) {
+        if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) {
+          eocd = i;
+          break;
+        }
+      }
+      if (eocd < 0) return null;
+
+      const total = tail[eocd + 10] | (tail[eocd + 11] << 8);
+      const cdSize = tail[eocd + 12] | (tail[eocd + 13] << 8) | (tail[eocd + 14] << 16) | (tail[eocd + 15] << 24);
+      const cdOffset = tail[eocd + 16] | (tail[eocd + 17] << 8) | (tail[eocd + 18] << 16) | (tail[eocd + 19] << 24);
+
+      // 2) 按需读中央目录那一段
+      let cd = tail;
+      if (cdOffset < size - tailLen) {
+        cd = new Uint8Array(await file.slice(cdOffset, cdOffset + cdSize).arrayBuffer());
+      }
+
+      const names = [];
+      let p = 0;
+      const base = cdOffset < size - tailLen ? 0 : cdOffset - (size - tailLen);
+      p = base;
+      while (p + 46 <= cd.length && names.length < total) {
+        if (!(cd[p] === 0x50 && cd[p + 1] === 0x4b && cd[p + 2] === 0x01 && cd[p + 3] === 0x02)) break;
+        const nameLen = cd[p + 28] | (cd[p + 29] << 8);
+        const extraLen = cd[p + 30] | (cd[p + 31] << 8);
+        const commentLen = cd[p + 32] | (cd[p + 33] << 8);
+        const raw = cd.subarray(p + 46, p + 46 + nameLen);
+        let name = '';
+        for (let k = 0; k < raw.length; k += 1) name += String.fromCharCode(raw[k]);
+        try {
+          name = decodeURIComponent(escape(name));
+        } catch {
+          /* 保持原样 */
+        }
+        names.push(name.replace(/\\/g, '/'));
+        p += 46 + nameLen + extraLen + commentLen;
+      }
+      if (!names.length) return null;
+
+      // 3) 有 manifest.json 才解压它（其余一律不解压）
+      let manifest = null;
+      const manifestEntry = names.find((n) => n === 'manifest.json');
+      if (manifestEntry) {
+        manifest = await readZipEntryAsJson(file, cd, base, manifestEntry, cdOffset < size - tailLen);
+      }
+
+      return { names, manifest };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 从中央目录找到某条目，解压它并 JSON.parse。失败返回 null。 */
+  async function readZipEntryAsJson(file, cd, base, targetName, cdIsSeparate) {
+    try {
+      let p = base;
+      let found = null;
+      while (p + 46 <= cd.length) {
+        if (!(cd[p] === 0x50 && cd[p + 1] === 0x4b && cd[p + 2] === 0x01 && cd[p + 3] === 0x02)) break;
+        const method = cd[p + 10] | (cd[p + 11] << 8);
+        const compSize = cd[p + 20] | (cd[p + 21] << 8) | (cd[p + 22] << 16) | (cd[p + 23] << 24);
+        const nameLen = cd[p + 28] | (cd[p + 29] << 8);
+        const extraLen = cd[p + 30] | (cd[p + 31] << 8);
+        const commentLen = cd[p + 32] | (cd[p + 33] << 8);
+        const localOffset = cd[p + 42] | (cd[p + 43] << 8) | (cd[p + 44] << 16) | (cd[p + 45] << 24);
+        const raw = cd.subarray(p + 46, p + 46 + nameLen);
+        let name = '';
+        for (let k = 0; k < raw.length; k += 1) name += String.fromCharCode(raw[k]);
+        try {
+          name = decodeURIComponent(escape(name));
+        } catch {
+          /* 保持原样 */
+        }
+        if (name.replace(/\\/g, '/') === targetName) {
+          found = { method, compSize, localOffset };
+          break;
+        }
+        p += 46 + nameLen + extraLen + commentLen;
+      }
+      if (!found) return null;
+
+      // 读本地头拿到文件名/extra 的实际长度
+      const local = new Uint8Array(await file.slice(found.localOffset, found.localOffset + 30).arrayBuffer());
+      const lNameLen = local[26] | (local[27] << 8);
+      const lExtraLen = local[28] | (local[29] << 8);
+      const dataStart = found.localOffset + 30 + lNameLen + lExtraLen;
+      const raw = new Uint8Array(await file.slice(dataStart, dataStart + found.compSize).arrayBuffer());
+
+      let bytes = raw;
+      if (found.method === 8) {
+        // deflate 解压用浏览器内置的 DecompressionStream
+        const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        const buf = await new Response(stream).arrayBuffer();
+        bytes = new Uint8Array(buf);
+      }
+      const text = new TextDecoder('utf-8').decode(bytes);
+      return JSON.parse(text);
+    } catch {
+      return null;
+    }
+  }
 
   /** 上传一个 zip，返回宿主落盘后的绝对路径。 */
   async function uploadZip(file) {
@@ -1042,7 +1177,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
    * @param {boolean} [props.busy]
    * @param {string} [props.hint]
    */
-  function DropZone({ onFile, busy = false, hint, dropRef }) {
+  function DropZone({ onFile, busy = false, hint, dropRef, phase }) {
     const [over, setOver] = useState(false);
     const [hover, setHover] = useState(false);
     const inputRef = useRef(null);
@@ -1099,7 +1234,11 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       h(
         'div',
         { style: { fontSize: 13, fontWeight: 500 } },
-        busy ? translate('drop.running') : over ? translate('drop.release') : translate('drop.title'),
+        busy
+          ? phase || translate('drop.running')
+          : over
+            ? translate('drop.release')
+            : translate('drop.title'),
       ),
       h('div', { className: 'pp-hint', style: { marginTop: 4 } }, hint ?? translate('drop.hint')),
       h('input', {
@@ -1447,6 +1586,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const [pendingImport, setPendingImport] = useState(null);
     /** 当前弹窗对应的服务端任务 id（取消时要通知服务端）。 */
     const pendingJobId = useRef(null);
+    /** 导入进度阶段文案（读取中 / 上传中 / 检查冲突…），空串表示没在跑。 */
+    const [phase, setPhase] = useState('');
     /** 后台任务列表：切走画面回来靠它恢复 */
     const [jobs, setJobs] = useState([]);
     /** 体积上限（MiB），0 = 不限制。默认跟着服务端配置走。 */
@@ -1620,10 +1761,66 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         // 两者都走"上传 → 导入"，具体分流由服务端按扩展名决定。
         const isArchive = /\.(zip|tgz|tar\.gz)$/i.test(name);
         if (isArchive) {
+          /* 第一步：先在浏览器里只读 zip 尾部，几百毫秒就知道包里有哪些插件、
+           * 哪些跟已装的重名 —— 不用等整个文件传完。
+           * 用户把几百 MB 的包拖进来时，这个差别是"秒弹"和"等半分钟"的区别。 */
+          const isZip = /\.zip$/i.test(name);
+          let quick = null;
+          if (isZip) {
+            setPhase(t('import.reading'));
+            quick = await peekZip(file);
+          }
+
+          if (quick && Array.isArray(quick.names) && quick.names.length) {
+            const installed = new Map((status?.plugins ?? []).map((plugin) => [plugin.name, plugin]));
+            const packPlugins = (quick.manifest?.plugins ?? []).filter(Boolean);
+            const conflicts = packPlugins
+              .filter((plugin) => installed.has(plugin.name))
+              .map((plugin) => ({
+                name: plugin.name,
+                version: plugin.version ?? null,
+                installedVersion: installed.get(plugin.name)?.version ?? null,
+                dest: installed.get(plugin.name)?.dir ?? null,
+                bytes: plugin.bytes ?? null,
+                sameVersion: (installed.get(plugin.name)?.version ?? null) === (plugin.version ?? null),
+              }));
+
+            // 不是整合包就直接报，省得白传一遍
+            const looksLikeBundle = Boolean(quick.manifest) && String(quick.manifest?.format ?? '').startsWith('dsh-plugin-pack@');
+            if (!looksLikeBundle) {
+              setImportResult({
+                error: `zip 不是整合包：这个 zip 里没有 dsh-plugin-pack 的 manifest.json（共 ${quick.names.length} 个文件）。它可能是普通的压缩包，或者是别的工具打的包。`,
+                code: 'NOT_A_BUNDLE',
+              });
+              setBusy(false);
+              setPhase('');
+              return;
+            }
+
+            if (conflicts.length) {
+              /* 先把冲突列表给出来，用户选完才上传 + 真导入。
+               * 这时还没上传，所以待决策任务在服务端也不存在 —— 全靠确认时再登记。 */
+              setPendingImport({
+                kind: 'bundle',
+                pendingFile: file, // 还没上传，先拿着 File 对象
+                file: null,
+                conflicts,
+                plugins: packPlugins,
+                quick: true,
+              });
+              setBusy(false);
+              setPhase('');
+              return;
+            }
+          }
+
+          // 第二步：确认无冲突（或拿不到快速清单）才上传
+          setPhase(t('import.uploading'));
           const uploaded = await uploadZip(file);
           setZipPath(uploaded.file);
 
           // 先 dryRun 探一次：有重名冲突就弹窗让用户决定
+          setPhase(t('import.checking'));
           const preview = await doImport({ file: uploaded.file, dryRun: true });
           const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
           if (conflicts.length) {
@@ -1637,6 +1834,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               plugins: preview.plugins ?? [],
             });
             setBusy(false);
+            setPhase('');
             return;
           }
 
@@ -1668,6 +1866,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         if (/\.(zip|tgz|tar\.gz)$/i.test(String(file?.name ?? ''))) setImportResult({ error: message, code });
         else setImportPluginResult({ error: message, code });
       } finally {
+        setPhase('');
         setBusy(false);
         lastDrop.dataTransfer = null;
       }
@@ -1677,28 +1876,45 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const confirmImport = async (decisions) => {
       const pending = pendingImport;
       if (!pending) return;
-      const jobId = pending.jobId ?? pendingJobId.current;
+      const jobId = pending.jobId ?? pendingJobId.current ?? null;
       // 明确了选择，就别让卸载钩子把它当"未决策"取消掉
       pendingJobId.current = null;
       setPendingImport(null);
       setBusy(true);
       setImportResult(null);
       try {
+        /* quick 模式：拖进来时只读了 zip 尾部就弹了冲突窗，文件还没上传。
+         * 现在用户确认了，才真正把文件传上去。 */
+        let file = pending.file;
+        if (!file && pending.pendingFile) {
+          setPhase(t('import.uploading'));
+          const uploaded = await uploadZip(pending.pendingFile);
+          setZipPath(uploaded.file);
+          file = uploaded.file;
+          setPhase(t('import.checking'));
+          // 服务端 dryRun 一次，把待决策任务登记上（这样切走也能取消）
+          const preview = await doImport({ file, dryRun: true });
+          pendingJobId.current = preview?.jobId ?? null;
+        }
+
+        setPhase('');
         const result = await doImport({
-          file: pending.file,
+          file,
           dryRun: false,
           restoreData: true,
           linkNodeModules: true,
           decisions,
           // 复用同一个任务记录，界面上是同一条从"待决策"变成"完成"
-          ...(jobId ? { jobId } : {}),
+          ...(jobId || pendingJobId.current ? { jobId: jobId ?? pendingJobId.current } : {}),
         });
+        pendingJobId.current = null;
         setImportResult(result);
         await load();
         await refreshJobs();
       } catch (err) {
         setImportResult({ error: String(err?.message ?? err) });
       } finally {
+        setPhase('');
         setBusy(false);
       }
     };
@@ -2003,7 +2219,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const importPage = h(
       'div',
       null,
-      h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop }),
+      h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
       // 后台任务：切走画面回来能看到刚才那次导入的结果
       h(JobList, { jobs, onClear: clearJobHistory, t }),
 
