@@ -196,66 +196,140 @@ dsh 的插件散在三处：
 
 ## 安装
 
+### 方式一：npm（推荐）
+
 ```powershell
-# 1. 放进 profile 的本地插件目录
-Copy-Item -Recurse D:\Documents\dsh-plugin-pack "$env:DSH_HOME\profiles\desktop\local-plugins\dsh-plugin-pack"
+cd $env:DSH_HOME\profiles\desktop
+npm i dsh-plugin-pack
+```
 
-# 2. 让 profile 认识它（等价于 pnpm add link:）
-#    在 profiles/desktop/package.json 的 dependencies 里加：
-#      "dsh-plugin-pack": "link:./local-plugins/dsh-plugin-pack"
-#    在 dsh.profile.bundles 数组里加：
-#      "dsh-plugin-pack"
+然后在 `profiles/desktop/package.json` 的 `dsh.profile.bundles` 里加一行：
 
-# 3. 建 node_modules 链接（或直接 pnpm install）
-# 4. 重启 dsh
+```json
+"dsh.profile": {
+  "bundles": [ "...其它 bundle...", "dsh-plugin-pack" ]
+}
+```
+
+重启 dsh。
+
+### 方式二：从 GitHub 克隆
+
+```powershell
+git clone https://github.com/HTRP1486/dsh-plugin-pack.git D:\Documents\dsh-plugin-pack
+cd D:\Documents\dsh-plugin-pack
+node scripts\install-to-profile.mjs
+```
+
+安装脚本做三件事（幂等，可重复跑）：
+
+1. 复制到 `profiles/desktop/local-plugins/dsh-plugin-pack`
+2. 写 `dependencies`（`link:./local-plugins/dsh-plugin-pack`）和 `bundles`
+3. 建 `node_modules` junction
+
+### 方式三：让 agent 代装
+
+把仓库路径发给 dsh 里的 agent：
+
+> 把 D:\Documents\dsh-plugin-pack 装进当前 profile
+
+### 装完检查
+
+重启 dsh 后打开「插件」页，顶部应该多了 **导入** 和 **导出** 两个标签。
+
+看不到？确认声明完整：
+
+```powershell
+node -e "const p=require('./package.json'); console.log(p.dsh.client)"
+# 应输出 { platform: 'web', immediately: true, inject: [ 'slots', 'locale' ] }
 ```
 
 也可以让 agent 代劳：把本目录路径给它，让它调 `plugin_pack_import` 之外的普通文件工具写这两处配置。
 
 ---
 
+## 第一次用：三步备份，三步还原
+
+### 备份（在旧机器上）
+
+1. 打开「插件」页 → **导出** 标签
+2. 全选插件（或只勾要带走的），选保存位置
+3. 点 **开始导出** → 得到一个 `.zip`
+
+> 插件多、体积大时可能要等 20~30 秒。期间可以切走，任务在后台跑，回来还能看到进度。
+
+### 还原（在新机器上）
+
+1. 装好 dsh 和本插件
+2. 打开「插件」页 → **导入** 标签
+3. 把那个 `.zip` **拖进框里**
+
+拖完自动导入。遇到重名插件会弹窗问「覆盖」还是「跳过」。
+
+### 收尾
+
+**重启 dsh。** 插件、依赖、配置、开关全部恢复。
+
+不放心？每次导入前都会自动备份，点「备份与回滚」能一键回到导入前的状态。
+
+---
+
 ## 用法
 
-### 在 dsh 里（推荐，两种都行）
+### 图形界面
 
-**图形界面**：设置 → 插件整合包（或右下角浮动按钮）。见上面的界面说明。
+三个入口，内容一样：
 
-**直接说话**（agent 会调工具）：
+| 入口 | 位置 |
+| --- | --- |
+| **导入 / 导出 标签** | 「插件」页顶部，`已安装` 和 `发现` 旁边 |
+| **插件行详情** | 「已安装」列表里点 `dsh-plugin-pack` 那一行 |
+| **设置页** | 设置 → 插件整合包（整页版） |
+
+### 直接说话（agent 帮你调工具）
 
 > 把现在的插件导出成一个整合包
 > 看看这个包里有什么
-> 导入 D:\Downloads\dsh-plugin-pack-desktop-20261026-145723.zip
+> 导入 D:\backup\dsh-plugin-pack-desktop-20261028-112000.zip
+> 回滚上一次导入
 
-工具清单：
+### 工具清单
 
 | 工具 | 作用 |
 | --- | --- |
-| `plugin_pack_list` | 列出可导出的插件、依赖数、patch 行数、体积、可选数据目录、历史备份 |
-| `plugin_pack_export` | 导出整合包 |
-| `plugin_pack_inspect` | 读包，列出内容与警告（导入前先看） |
-| `plugin_pack_import` | 导入（支持 `dryRun` 预演） |
+| `plugin_pack_list` | 列出可导出的插件、依赖数、patch 行数、体积、数据目录、历史备份 |
+| `plugin_pack_export` | 导出（勾 1 个得 tgz，勾多个得 zip） |
+| `plugin_pack_inspect` | 读包，列出内容与警告 |
+| `plugin_pack_import` | 导入（`dryRun: true` 预演） |
 | `plugin_pack_rollback` | 回滚最近一次导入 |
+| `plugin_pack_hotload` | 热加载客户端界面，改完代码不用重启 |
+| `plugin_pack_client_status` | 查客户端界面在宿主图表里的状态，排查「装了但看不到」 |
 
 ### 斜杠命令
 
 ```
 /pack list
 /pack export [路径] [--include=a,b] [--exclude=a,b] [--data] [--secrets] [--dry]
-/pack inspect <zip>
-/pack import <zip> [--dry] [--skip] [--no-data] [--no-link] [--overwrite]
+/pack inspect <包路径>
+/pack import <包路径> [--dry] [--skip] [--no-data] [--no-link] [--overwrite]
 /pack rollback [备份名]
 /pack backups
+/pack hotload [包名]
+/pack client [包名]
 ```
 
 ### 命令行（不需要 dsh 在跑）
 
 ```powershell
-node D:\Documents\dsh-plugin-pack\bin\dsh-plugin-pack.js list
-node D:\Documents\dsh-plugin-pack\bin\dsh-plugin-pack.js export --out D:\backup
-node D:\Documents\dsh-plugin-pack\bin\dsh-plugin-pack.js inspect D:\backup\dsh-plugin-pack-desktop-20261026-145723.zip
-node D:\Documents\dsh-plugin-pack\bin\dsh-plugin-pack.js import D:\backup\dsh-plugin-pack-desktop-20261026-145723.zip --dry
-node D:\Documents\dsh-plugin-pack\bin\dsh-plugin-pack.js rollback
+dsh-plugin-pack list
+dsh-plugin-pack export --out D:\backup
+dsh-plugin-pack inspect D:\backup\dsh-plugin-pack-desktop-20261028-112000.zip
+dsh-plugin-pack import D:\backup\dsh-plugin-pack-desktop-20261028-112000.zip --dry
+dsh-plugin-pack rollback
+dsh-plugin-pack backups
 ```
+
+没装到 PATH 时用 `node bin\dsh-plugin-pack.js <命令>`。
 
 ---
 
@@ -352,8 +426,112 @@ node --test D:\Documents\dsh-plugin-pack\test\
   内部 `require('react')` 后全用 `react.createElement`，宿主加载时不需要任何构建步骤。
 - **不一次读整个包**：导出用 `writeZipStream` 逐条写盘；导入用 `readZipMeta` 只读中央目录，
   再逐条 `extractEntry`。555 MiB 的包峰值内存只有单个文件那么大。
+- **全链路异步**：压缩用 `deflateRaw` / `createGzip` 而不是 `*Sync`。同步版本会把整个
+  事件循环卡死 —— 实测 64 MiB 同步 gzip 耗时 413ms，期间定时器一次都不触发，
+  dsh 的对话等请求全部无响应。导出几百 MiB 就是好几秒的完全冻结。
 - **不擅自重启**：界面只提示「重启后生效」，不替用户杀进程。
 
 ---
+
+## 欢迎开发者
+
+这个项目是从零手写出来的，**没有任何第三方运行时依赖**，全部只用 Node 内置模块
+（`node:fs` / `node:path` / `node:zlib` / `node:crypto` / `node:module`）。
+如果你对下面任何一块感兴趣，都欢迎参与。
+
+### 最值得动手的几块
+
+| 方向 | 现状 | 可以怎么改 |
+| --- | --- | --- |
+| **压缩** | `zip-stream.js` 用 `deflateRaw` 逐条压缩，`tar.js` 用 `createGzip` 流式 | 换 zstd / 并行压缩 worker；大包分片 |
+| **依赖解析** | `scan.js` 按 `dependencies` 递归，跳过 peer / `@deepseek-ai/*` | pnpm workspace 协议、`peerDependencies` 可选补齐、版本冲突合并 |
+| **tar 实现** | `tar.js` 手写 ustar，支持 prefix 拆分，不支持 ZIP64 / PAX | 加 PAX 长文件名、大文件（>8 GiB）支持 |
+| **界面** | `client.js` 单文件 ~97 kB，全 `createElement` | 拆组件、加虚拟滚动（插件多时列表会卡） |
+| **后台任务** | `jobs.js` 内存记录，保留 30 分钟 | 落盘持久化、任务取消、并发限制 |
+| **导入策略** | 逐插件覆盖/跳过 | 差异预览（哪个文件会变）、版本回退、依赖冲突检查 |
+| **测试** | 162 个，覆盖导出/导入/冲突/回滚/界面渲染 | 加模糊测试（畸形 zip/tgz）、跨平台 CI（Linux/macOS） |
+
+### 开发流程
+
+```bash
+git clone https://github.com/HTRP1486/dsh-plugin-pack.git
+cd dsh-plugin-pack
+npm test          # 162 个测试，约 40 秒
+```
+
+### 改完怎么生效
+
+**只改 `client.js`**（界面）——不用重启 dsh：
+
+```powershell
+node scripts\install-to-profile.mjs
+# 然后在面板里点「热加载界面」，或：
+dsh-plugin-pack  →  界面右上角按钮
+```
+
+热加载原理在 [`hotload.js`](hotload.js) 顶部注释里写得很细：宿主把「这个包不是客户端包」
+的判定缓存在 `pkgMeta` 里且永不失效，所以要删缓存 → 标 dirty → flush → rebuilt。
+
+**改 `lib/*.js`**（服务端）——需要重启 dsh。导出/导入这类操作走的是新起的 worker
+子进程，会重新读磁盘上的模块，但工具注册和路由在启动时就固定了。
+
+### 代码地图
+
+```
+client.js            界面（~97 kB，单文件，无 JSX）
+hotload.js           客户端热加载（删缓存 + flush + rebuilt）
+lib/
+├── index.js         插件入口：7 个工具 + /pack 命令
+├── server.js        HTTP 桥 11 个路由（/plugin-pack/*）
+├── scan.js          扫描插件、依赖闭包、patch 行；60 秒缓存
+├── export.js        导出：单插件 → tgz，多插件 → zip（内含 tgz）
+├── import.js        导入 zip：解包、备份、落地、合并配置、回滚
+├── import-tgz.js    导入 tgz：解包成 npm 包 → 走本地插件导入
+├── import-plugin.js 导入本地插件目录
+├── tar.js           零依赖 tar 读写（ustar + prefix 拆分）
+├── zip.js           零依赖 zip 读（central directory + CRC 校验）
+├── zip-stream.js    零依赖 zip 写（异步 deflate，store 已压缩条目）
+├── patch-text.js    cordis.patch.yml 的块级文本处理（保留注释缩进）
+├── jobs.js          后台任务记录（进度、结果、失败原因）
+├── inbox.js         拖放上传：multipart 解析 + 落盘
+├── util.js          文件工具 + walkTree（同步 / 异步两版）
+└── home.js          DSH_HOME / profile 路径解析
+```
+
+### 提交前请确认
+
+```bash
+npm test                        # 全绿
+grep -r "C:/Users" . --include=*.js --include=*.mjs   # 不该有机器路径
+```
+
+代码里**不要出现**：个人路径、token、内网地址、真实 profile 内容。
+测试需要 fixture 时放 `test/fixtures/`，不要读用户机器上的真实文件。
+
+### 欢迎的 PR 类型
+
+- **修 bug**：尤其是导入后插件加载失败的场景（历史上出过 scoped 包名被压扁的坑）
+- **加平台支持**：现在主要在 Windows 上测过，Linux / macOS 的路径处理欢迎验证
+- **性能**：大包导出（GB 级）、万级文件扫描
+- **界面**：交互细节、无障碍、i18n（目前只有中英）
+- **文档**：某个你踩过的坑，写进 README 或注释
+
+不欢迎的：引入运行时依赖（这个项目的卖点就是零依赖）、改包格式但不考虑向后兼容
+（导入端同时支持 `@1` 和 `@2`，新格式请照这个做）。
+
+### 遇到问题
+
+- 提 [Issue](https://github.com/HTRP1486/dsh-plugin-pack/issues)，附上 `dsh-plugin-pack list` 的输出和错误信息
+- 排查「装了但界面不显示」：先跑 `plugin_pack_client_status`，它会告你包在不在宿主图表里
+- 包导入后插件报 `ERR_MODULE_NOT_FOUND`：检查 `node_modules` 里的 scoped 包是不是
+  `@scope/name` 两级结构（历史 bug，见 `test/scoped-deps.test.mjs`）
+
+---
+
+## 许可
+
+MIT，随便用、随便改、随便发。改了不用署名，但欢迎回来提个 PR。
+
+如果这个工具帮你省了事，给个 Star 就是最好的感谢。
 
 MIT
