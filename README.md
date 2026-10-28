@@ -1,8 +1,23 @@
 # dsh-plugin-pack
 
-DeepSeek Harness 的**插件整合包**工具：把当前 profile 里装的所有第三方插件，连运行时依赖和 `cordis.patch.yml` 配置，一键打成一个 zip；换机器、换 profile 时一键导入还原。
+[![npm](https://img.shields.io/npm/v/dsh-plugin-pack)](https://www.npmjs.com/package/dsh-plugin-pack)
+[![license](https://img.shields.io/npm/l/dsh-plugin-pack)](LICENSE)
+
+DeepSeek Harness 的**插件整合包**工具：把当前 profile 里装的所有第三方插件，连运行时依赖和 `cordis.patch.yml` 配置，一键打成一个 zip；换机器、换 profile 时拖进去就能还原。
 
 **有图形界面**——不用记命令，点几下就完成。桌面客户端和 Web 端都能用。
+
+```bash
+npm i dsh-plugin-pack
+```
+
+或者直接克隆：
+
+```bash
+git clone https://github.com/HTRP1486/dsh-plugin-pack.git
+```
+
+零依赖，只用 Node 内置模块。162 个测试。
 
 ---
 
