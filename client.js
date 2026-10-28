@@ -483,6 +483,10 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
   /** 后台任务列表（进行中 + 已完成）。 */
   const getJobs = () => api('/plugin-pack/jobs?limit=20');
   const clearJobs = () => api('/plugin-pack/jobs/clear', { method: 'POST', body: '{}' });
+  /** 待决策任务（导入遇到重名时登记的）：切回来捡弹窗用。 */
+  const getWaiting = () => api('/plugin-pack/waiting');
+  const cancelWaiting = (id, reason) =>
+    api('/plugin-pack/waiting/cancel', { method: 'POST', body: JSON.stringify({ id, reason }) });
 
   /** 上传一个 zip，返回宿主落盘后的绝对路径。 */
   async function uploadZip(file) {
@@ -1434,8 +1438,15 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const [pickerDir, setPickerDir] = useState('');
     const [pickerMode, setPickerMode] = useState('file');
     const [importPluginResult, setImportPluginResult] = useState(null);
-    /** 待确认的重名冲突：{ kind, file, conflicts, plugins }。非空时弹窗。 */
+    /**
+     * 待确认的重名冲突：{ jobId, kind, file, conflicts, plugins }。非空时弹窗。
+     *
+     * 这个状态来自服务端的"待决策"任务，不是纯前端内存 ——
+     * 切走画面再回来能捡回弹窗，否则会留下文件已上传但没人处理的悬空状态。
+     */
     const [pendingImport, setPendingImport] = useState(null);
+    /** 当前弹窗对应的服务端任务 id（取消时要通知服务端）。 */
+    const pendingJobId = useRef(null);
     /** 后台任务列表：切走画面回来靠它恢复 */
     const [jobs, setJobs] = useState([]);
     /** 体积上限（MiB），0 = 不限制。默认跟着服务端配置走。 */
@@ -1509,6 +1520,64 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       }
     }, []);
 
+    /* 挂载时捡回"待决策"的导入。
+     *
+     * 场景：用户在冲突弹窗里没做选择就切走了画面。组件卸载后前端 state 丢了，
+     * 但服务端还记着这个待决策任务 —— 回来时把它捡回来重开弹窗，
+     * 而不是让那次导入悬在半空（文件传上去了，没人处理）。
+     */
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        try {
+          const data = await getWaiting();
+          if (!alive) return;
+          const list = Array.isArray(data?.waiting) ? data.waiting : [];
+          const first = list[0];
+          if (!first) return;
+          pendingJobId.current = first.id;
+          setPendingImport({
+            kind: 'bundle',
+            jobId: first.id,
+            file: first.payload?.file ?? null,
+            conflicts: first.payload?.conflicts ?? [],
+            plugins: first.payload?.plugins ?? [],
+            resumed: true,
+          });
+        } catch {
+          /* 服务端还没这个接口就静默跳过 */
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+    }, []);
+
+    /* 组件卸载 = 用户切走画面/关页面。
+     *
+     * 此时如果弹窗还开着、用户没做选择，就通知服务端取消这次导入，
+     * 避免留下"文件已上传但不处理"的悬空任务。
+     */
+    useEffect(
+      () => () => {
+        const id = pendingJobId.current;
+        if (!id) return;
+        pendingJobId.current = null;
+        // 卸载时不能等结果，用 keepalive 尽量送达
+        try {
+          fetch(new URL('/plugin-pack/waiting/cancel', window.location.origin).toString(), {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id, reason: '用户切走了画面，未做选择' }),
+            keepalive: true,
+          }).catch(() => {});
+        } catch {
+          /* 忽略 */
+        }
+      },
+      [],
+    );
+
     const clearJobHistory = async () => {
       try {
         await clearJobs();
@@ -1558,8 +1627,11 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           const preview = await doImport({ file: uploaded.file, dryRun: true });
           const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
           if (conflicts.length) {
+            // 服务端在 dryRun 时已登记了"待决策"任务，带 jobId 回来
+            pendingJobId.current = preview?.jobId ?? null;
             setPendingImport({
               kind: 'bundle',
+              jobId: preview?.jobId ?? null,
               file: uploaded.file,
               conflicts,
               plugins: preview.plugins ?? [],
@@ -1605,6 +1677,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const confirmImport = async (decisions) => {
       const pending = pendingImport;
       if (!pending) return;
+      const jobId = pending.jobId ?? pendingJobId.current;
+      // 明确了选择，就别让卸载钩子把它当"未决策"取消掉
+      pendingJobId.current = null;
       setPendingImport(null);
       setBusy(true);
       setImportResult(null);
@@ -1615,6 +1690,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           restoreData: true,
           linkNodeModules: true,
           decisions,
+          // 复用同一个任务记录，界面上是同一条从"待决策"变成"完成"
+          ...(jobId ? { jobId } : {}),
         });
         setImportResult(result);
         await load();
@@ -1623,6 +1700,20 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         setImportResult({ error: String(err?.message ?? err) });
       } finally {
         setBusy(false);
+      }
+    };
+
+    /** 用户点了取消 / 按了 Esc / 点了遮罩：视为放弃这次导入。 */
+    const cancelImport = async () => {
+      const id = pendingJobId.current ?? pendingImport?.jobId ?? null;
+      pendingJobId.current = null;
+      setPendingImport(null);
+      if (!id) return;
+      try {
+        await cancelWaiting(id, '用户取消了导入');
+        await refreshJobs();
+      } catch {
+        /* 取消失败不阻塞界面 */
       }
     };
 
@@ -2173,7 +2264,14 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               .then((preview) => {
                 const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
                 if (conflicts.length) {
-                  setPendingImport({ kind: 'bundle', file: picked, conflicts });
+                  pendingJobId.current = preview?.jobId ?? null;
+                  setPendingImport({
+                    kind: 'bundle',
+                    jobId: preview?.jobId ?? null,
+                    file: picked,
+                    conflicts,
+                    plugins: preview?.plugins ?? [],
+                  });
                   return;
                 }
                 return doImport({ file: picked, dryRun: false, mode: 'merge', restoreData: true, linkNodeModules: true }).then(
@@ -2201,7 +2299,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         pending: pendingImport,
         t,
         onConfirm: confirmImport,
-        onCancel: () => setPendingImport(null),
+        onCancel: cancelImport,
       }),
     );
   }
