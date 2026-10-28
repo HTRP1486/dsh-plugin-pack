@@ -1,0 +1,102 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+- id: ui-settings-account
+  name: '@deepseek-ai/dsh-client-ui-settings-account'
+  config:
+    version: 1
+    step: done
+    purpose: null
+    process: standard
+    completion: skipped
+    usage: compact
+    developerTools: false
+- id: ui-chat
+  name: '@deepseek-ai/dsh-client-ui-chat'
+  config:
+    transcriptView: standard
+    performanceUsage: detailed
+    linkOpening: new-tab
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: demo-proxy
+    model: demo-model
+    reasoningEffort: max
+- id: one-click-polish
+  name: dsh-one-click-polish
+  config:
+    modelSource: fixed
+    provider: demo-provider
+    model: demo-model
+    defaultStrength: strong
+    reasoningEffort: on
+    autoMode: goal
+    autoRounds: 3
+    autoGoal: 用真实数据回测，最后检查 bug
+    autoResearch: web
+    idleWaitMs: 3600000
+  disabled: false
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      demo-proxy:
+        displayName: Demo Proxy
+        apiKeyEnv: DEMO_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8788/v1
+        retryPolicy:
+          mode: normal
+          maxRetries: 8
+          backoff:
+            initialDelayMs: 2000
+            maxDelayMs: 30000
+            jitterRatio: 0.1
+        models:
+          - id: demo-model
+            contextWindow: 1000000
+            maxTokens: 128000
+            reasoningEfforts:
+              low: low
+              high: high
+              max: max
+            input:
+              - text
+              - image
+          - id: demo-small
+            contextWindow: 192000
+            maxTokens: 32000
+            input:
+              - text
+- id: ui-settings-general
+  name: '@deepseek-ai/dsh-client-ui-settings-general'
+  config:
+    welcomeNoticeVersion: 2026-08-13.1
+- id: agent-preset-registry
+  name: '@deepseek-ai/dsh-agent-preset-registry'
+  config:
+    default: standard
+    selectedDefault: standard
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    defaultPreset: standard
+- id: sandbox
+  name: '@deepseek-ai/dsh-sandbox-local'
+  config:
+    mode: workspace-write
+- id: session-titles
+  name: '@deepseek-ai/dsh-experimental-session-titles-bundle'
+  config:
+    enabled: true
+# PowerShell 7 优先。行名直接指到入口文件：ESM 不支持目录导入，
+# 所以写 index.js 而不是包目录，也不需要 pnpm link。
+- insert:
+    - id: pwsh7-preference
+      name: 'D:/Documents/dsh-pwsh7-preference/index.js'
+      config:
+        blockWindowsPowerShell: true
+        allowMarker: '#ps5-ok'
+        promptSection: true
+        pwshPath: ''

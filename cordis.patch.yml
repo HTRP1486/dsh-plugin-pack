@@ -1,0 +1,24 @@
+# dsh-plugin-pack bundle patch
+#
+# 只插一行：插件本体。
+#   - 宿主侧：工具 plugin_pack_*、/pack 命令、/plugin-pack/* HTTP 路由（lib/index.js + lib/server.js）
+#   - 客户端：插件页顶部「导入 / 导出」两个标签页 + 插件行详情 + 设置页（client.js）
+#   - 热加载：hotload.js，改完 client 代码或 package.json 不必重启（/pack hotload 或界面按钮）
+- insert:
+    - id: dsh-plugin-pack
+      name: dsh-plugin-pack
+      config:
+        enabled: true
+        # 空字符串 = $DSH_HOME/exports
+        exportDir: ''
+        # 默认不打包插件自己的数据目录（可能含 token）
+        includeData: false
+        # 默认剔除 .env / *.pem / credentials.json 之类
+        includeSecrets: false
+        # 体积上限，按**未压缩**字节算（压缩比约 1:3）。
+        # 默认 2 GiB 原始 ≈ 600~700 MiB 成品，够全量备份；界面里也能改，0 = 不限制。
+        maxBytes: 2147483648
+        # 导入时是否覆盖已存在的同 id patch 行
+        overwritePatchConfig: false
+        # 启动时自动把自己的客户端半身热加载一次（失败只记日志，不阻断）
+        selfHotload: true

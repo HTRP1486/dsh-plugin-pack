@@ -1,0 +1,10 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+*.tgz
+*.zip
+.turbo/
+coverage/
+.nyc_output/
+*.tsbuildinfo
