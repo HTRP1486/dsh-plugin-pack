@@ -2174,9 +2174,14 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               .catch((err) => setImportResult({ error: String(err?.message ?? err) }));
             return;
           }
-          // 导出：选的是目录 → 补末尾分隔符，让后端按"目录 + 自动命名"处理，
-          // 而不是把目录名当成 zip 文件名再加 .zip
-          setOut(picked.endsWith('\\') || picked.endsWith('/') ? picked : `${picked}\\`);
+          // 导出：只有选中的是「目录」才补末尾分隔符，让后端按"目录 + 自动命名"处理。
+          //
+          // 之前这里无条件补 `\`，导致选中 xxx.tgz 这种文件后变成 `xxx.tgz\`，
+          // 后端按"末尾带分隔符 → 当目录"处理，又拼了一次默认文件名，
+          // 结果在名为 xxx.tgz 的文件夹里塞了个新 zip —— 路径看着像文件其实是目录。
+          // 所以带扩展名的就当文件，原样保留。
+          const looksLikeFile = /\.[a-z0-9]{2,8}$/i.test(picked);
+          setOut(looksLikeFile || picked.endsWith('\\') || picked.endsWith('/') ? picked : `${picked}\\`);
         },
       }),
       // 重名冲突弹窗：叠在最上层

@@ -146,12 +146,32 @@ test('选择器在 dir 模式下：单击文件夹只选中，不进入', async 
   );
 });
 
-test('导出页选目录后补末尾分隔符，避免被当文件名', () => {
+test('导出页选目录后补末尾分隔符，但选文件时不补', () => {
   const src = fs.readFileSync(clientFile, 'utf8');
-  // 找到导出分支里对 setOut 的调用
-  const at = src.indexOf('// 导出：选的是目录');
+  const at = src.indexOf('// 导出：只有选中的是「目录」才补末尾分隔符');
   assert.ok(at > 0, '应有导出分支注释');
-  const snippet = src.slice(at, at + 320);
+  const snippet = src.slice(at, at + 700);
   assert.ok(snippet.includes('setOut'), '应设置输出路径');
-  assert.ok(/endsWith\('\\\\\\\\'\)|endsWith\("\\\\\\\\"\)|endsWith\('\\\\'\)/.test(snippet) || snippet.includes('endsWith'), '应判断末尾分隔符');
+  // 关键：要判断"像不像文件"，带扩展名的原样保留
+  assert.ok(/looksLikeFile/.test(snippet), '应判断是否像文件');
+  assert.ok(/\\\.\[a-z0-9\]/.test(snippet), '应检测扩展名');
+  assert.ok(snippet.includes('endsWith'), '应判断末尾分隔符');
+});
+
+test('后端兜底：xxx.tgz\\ 这种误操作不再当目录拼一层', () => {
+  // 用户选了文件后界面曾无条件补 `\`，导致 `a.tgz\` 被当目录，
+  // 又在里面拼了个 zip。现在应识别出它是文件，原样返回。
+  const out = resolveOutFile('D:/backup/a.tgz\\', 'C:/home', 'desktop', '20260101-000000');
+  assert.equal(out, path.resolve('D:/backup/a.tgz'));
+  assert.ok(!out.endsWith('.zip'), '不该在 a.tgz 后面再拼 zip');
+});
+
+test('后端兜底：真目录带分隔符仍按目录处理', () => {
+  const out = resolveOutFile('D:/backup/\\', 'C:/home', 'desktop', '20260101-000000');
+  assert.equal(out, path.join('D:/backup', 'dsh-plugin-pack-desktop-20260101-000000.zip'));
+});
+
+test('后端兜底：无扩展名的路径带分隔符 → 当目录', () => {
+  const out = resolveOutFile('D:/mybackup\\', 'C:/home', 'desktop', '20260101-000000');
+  assert.equal(out, path.join('D:/mybackup', 'dsh-plugin-pack-desktop-20260101-000000.zip'));
 });
