@@ -202,7 +202,7 @@ test('导入页有拖放区，且文案明确说了能拖 zip 和文件夹', asy
   assert.ok(text.includes('drop.hint'), '应有拖放提示文案');
 });
 
-test('导入页只剩拖拽框，没有任何页签/输入框/勾选项', async () => {
+test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多一个网络地址框', async () => {
   const react = makeReact();
   const mod = await loadClient(react);
   const registered = applyClient(mod);
@@ -225,20 +225,30 @@ test('导入页只剩拖拽框，没有任何页签/输入框/勾选项', async 
   assert.equal(importText.includes('import.link'), false, '不该再有「建链接」勾选');
   assert.equal(importText.includes('import.run'), false, '不该再有「开始导入」按钮');
 
-  // 不该有 input / select 元素
+  // 从网络安装：允许，但要说明它会先校验是不是整合包
+  assert.ok(importText.includes('net.title'), '应有「从网络安装」入口');
+  assert.ok(importText.includes('net.desc'), '应说明支持哪些来源、会做校验');
+  assert.ok(importText.includes('net.go'), '应有下载安装按钮');
+
+  // input 统计：DropZone 的隐藏 file input + 网络地址框（1 个 text）而已
   let inputs = 0;
+  let textInputs = 0;
   const walk = (node) => {
     if (node == null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
       for (const item of node) walk(item);
       return;
     }
-    if (node.type === 'input' || node.type === 'select') inputs += 1;
+    if (node.type === 'input' || node.type === 'select') {
+      inputs += 1;
+      if (String(node.props?.type ?? '') === 'text') textInputs += 1;
+    }
     for (const child of node.children ?? []) walk(child);
   };
   walk(tree);
-  // 拖拽框内部有一个隐藏的 <input type=file>（点框选文件用），除此之外不该有别的
-  assert.ok(inputs <= 1, `导入页最多只该有一个隐藏 file input，实际 ${inputs}`);
+  // 拖拽框内部有一个隐藏的 <input type=file>，加上网络地址框，最多两个
+  assert.ok(inputs <= 2, `导入页最多两个 input（隐藏 file + 网络地址），实际 ${inputs}`);
+  assert.equal(textInputs, 1, '只该有一个文本框（网络地址）');
 
   // 导出页：手动范围切换已删除，改为按勾选数量自动判断
   const exportTab = registered.find((item) => item.spec.id === 'plugin-pack-export');

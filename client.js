@@ -111,6 +111,13 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.reading': '正在读取包内容…',
     'import.uploading': '正在上传…',
     'import.checking': '正在检查冲突…',
+    'import.downloading': '正在从网络下载…',
+    'net.title': '从网络安装',
+    'net.desc': '支持 GitHub 仓库 / Release / 直链，或 npm 包名。下载后会校验是不是整合包。',
+    'net.placeholder': 'https://github.com/用户/仓库  或  dsh-plugin-pack  或  https://.../x.zip',
+    'net.go': '下载并安装',
+    'net.running': '正在处理…',
+    'net.notBundle': '下载到的不是整合包',
     'drop.title': '把 zip / tgz 或插件文件夹拖到这里',
     'drop.release': '松手就导入',
     'drop.running': '正在导入…',
@@ -149,6 +156,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'jobs.kindImport': '导入整合包',
     'jobs.kindImportPlugin': '导入插件',
     'jobs.kindRollback': '回滚',
+    'jobs.kindFetch': '网络安装',
     'jobs.running': '进行中',
     'jobs.done': '已完成',
     'jobs.failed': '失败',
@@ -272,6 +280,13 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.reading': 'Reading package contents…',
     'import.uploading': 'Uploading…',
     'import.checking': 'Checking for conflicts…',
+    'import.downloading': 'Downloading…',
+    'net.title': 'Install from network',
+    'net.desc': 'GitHub repo / release / direct link, or an npm package name. We verify it is a bundle after download.',
+    'net.placeholder': 'https://github.com/user/repo  ·  dsh-plugin-pack  ·  https://.../x.zip',
+    'net.go': 'Download and install',
+    'net.running': 'Working…',
+    'net.notBundle': 'Downloaded file is not a bundle',
     'drop.title': 'Drop a zip / tgz or plugin folder here',
     'drop.release': 'Release to import',
     'drop.running': 'Importing…',
@@ -309,6 +324,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'jobs.kindImport': 'Import bundle',
     'jobs.kindImportPlugin': 'Import plugin',
     'jobs.kindRollback': 'Rollback',
+    'jobs.kindFetch': 'Network install',
     'jobs.running': 'Running',
     'jobs.done': 'Done',
     'jobs.failed': 'Failed',
@@ -493,6 +509,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
   const getWaiting = () => api('/plugin-pack/waiting');
   const cancelWaiting = (id, reason) =>
     api('/plugin-pack/waiting/cancel', { method: 'POST', body: JSON.stringify({ id, reason }) });
+  /** 从网络来源（GitHub / npm / 直链）拉整合包。 */
+  const fetchBundle = (body) => api('/plugin-pack/fetch-bundle', { method: 'POST', body: JSON.stringify(body) });
 
   /* ------------------------- 浏览器端读 zip 头部 ------------------------- */
 
@@ -1438,6 +1456,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         import: t('jobs.kindImport'),
         'import-plugin': t('jobs.kindImportPlugin'),
         rollback: t('jobs.kindRollback'),
+        fetch: t('jobs.kindFetch'),
       })[kind] ?? kind;
 
     const statusColor = (status) =>
@@ -1588,6 +1607,10 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const pendingJobId = useRef(null);
     /** 导入进度阶段文案（读取中 / 上传中 / 检查冲突…），空串表示没在跑。 */
     const [phase, setPhase] = useState('');
+    /** 网络安装：地址输入框的内容。 */
+    const [netSource, setNetSource] = useState('');
+    /** 网络安装的结果/错误。 */
+    const [netResult, setNetResult] = useState(null);
     /** 后台任务列表：切走画面回来靠它恢复 */
     const [jobs, setJobs] = useState([]);
     /** 体积上限（MiB），0 = 不限制。默认跟着服务端配置走。 */
@@ -1869,6 +1892,106 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         setPhase('');
         setBusy(false);
         lastDrop.dataTransfer = null;
+      }
+    };
+
+    /**
+     * 从网络来源安装整合包（GitHub 仓库/Release、npm 包、任意直链）。
+     *
+     * 流程：下载 → 服务端校验"确实是整合包" → 有冲突先弹窗 → 确认后导入。
+     * 校验不过会明确报「不是整合包」，不会静默失败。
+     */
+    const runNetworkInstall = async () => {
+      const source = netSource.trim();
+      if (!source) {
+        setNetResult({ error: '请填一个地址，比如 https://github.com/用户/仓库 或 npm 包名' });
+        return;
+      }
+      setBusy(true);
+      setNetResult(null);
+      setImportResult(null);
+      setPhase(t('import.downloading'));
+      try {
+        const fetched = await fetchBundle({ source });
+        if (!fetched?.ok) {
+          setNetResult({ error: fetched?.error ?? '下载失败' });
+          return;
+        }
+        setPhase(t('import.checking'));
+
+        /* 下载到的可能是两种：
+         *   kind='plugin' → npm 包 / 单插件 tgz，走 tgz 导入
+         *   kind='bundle' → 整合包 zip，走整合包导入（可能要先问冲突） */
+        if (fetched.kind === 'plugin') {
+          const result = await doImport({
+            file: fetched.file,
+            dryRun: false,
+            mode: 'merge',
+            linkNodeModules: true,
+          });
+          setNetResult({
+            ok: true,
+            kind: 'plugin',
+            file: fetched.file,
+            from: fetched.from,
+            name: fetched.name,
+            bytes: fetched.bytes,
+            plugins: fetched.plugins,
+          });
+          setImportResult(result);
+          await load();
+          await refreshJobs();
+          return;
+        }
+
+        // 下载好的包按普通导入走一遍：先 dryRun 看有没有重名冲突
+        const preview = await doImport({ file: fetched.file, dryRun: true });
+        const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
+        if (conflicts.length) {
+          pendingJobId.current = preview?.jobId ?? null;
+          setPendingImport({
+            kind: 'bundle',
+            jobId: preview?.jobId ?? null,
+            file: fetched.file,
+            conflicts,
+            plugins: preview.plugins ?? [],
+          });
+          setNetResult({
+            ok: true,
+            downloaded: true,
+            file: fetched.file,
+            from: fetched.from,
+            name: fetched.name,
+            bytes: fetched.bytes,
+            plugins: fetched.plugins,
+          });
+          return;
+        }
+
+        const result = await doImport({
+          file: fetched.file,
+          dryRun: false,
+          mode: 'merge',
+          restoreData: true,
+          linkNodeModules: true,
+        });
+        setNetResult({
+          ok: true,
+          file: fetched.file,
+          from: fetched.from,
+          name: fetched.name,
+          bytes: fetched.bytes,
+          plugins: fetched.plugins,
+        });
+        setImportResult(result);
+        await load();
+        await refreshJobs();
+      } catch (err) {
+        const code = err?.code ? String(err.code) : null;
+        setNetResult({ error: String(err?.message ?? err), code });
+      } finally {
+        setPhase('');
+        setBusy(false);
       }
     };
 
@@ -2220,6 +2343,66 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       'div',
       null,
       h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
+
+      /* 从网络安装：GitHub / npm / 直链。
+       * 下载后服务端会校验它真的是整合包（inspectBundle），
+       * 不是就明确报「下载到的不是整合包」，不会硬导进去。 */
+      h(
+        'div',
+        { className: 'pp-card', style: { marginTop: 14 } },
+        h('h3', { style: { margin: '0 0 4px', fontSize: 14, fontWeight: 600 } }, t('net.title')),
+        h('p', { className: 'pp-hint', style: { margin: '0 0 10px' } }, t('net.desc')),
+        h(
+          'div',
+          { style: { display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' } },
+          h('input', {
+            className: 'pp-input pp-mono',
+            type: 'text',
+            value: netSource,
+            placeholder: t('net.placeholder'),
+            disabled: busy,
+            onInput: (event) => setNetSource(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' && !busy) runNetworkInstall();
+            },
+            style: { flex: '1 1 260px', minWidth: 0, fontSize: 12 },
+          }),
+          h(
+            'button',
+            {
+              className: 'pp-btn',
+              disabled: busy || !netSource.trim(),
+              onClick: runNetworkInstall,
+            },
+            busy ? t('net.running') : t('net.go'),
+          ),
+        ),
+        // 结果：下载成功 / 不是整合包 / 其它错误
+        netResult?.error
+          ? h(
+              'div',
+              { style: { marginTop: 10 } },
+              ['NOT_A_BUNDLE', 'NOT_A_ZIP', 'BAD_FORMAT', 'BAD_MANIFEST', 'BAD_PACK'].includes(String(netResult.code ?? '')) ||
+              /不是整合包|没有 manifest/i.test(String(netResult.error))
+                ? h(
+                    'div',
+                    { className: 'pp-not-bundle' },
+                    h('div', { className: 'pp-not-bundle-title' }, t('net.notBundle')),
+                    h('div', { className: 'pp-not-bundle-detail' }, String(netResult.error)),
+                  )
+                : h(Alert, { kind: 'err' }, netResult.error),
+            )
+          : netResult?.ok
+            ? h(
+                'div',
+                { className: 'pp-hint', style: { marginTop: 8 } },
+                `✓ ${netResult.from} · ${netResult.name ?? ''} · ${
+                  netResult.bytes ? (netResult.bytes / 1048576).toFixed(1) + ' MiB' : ''
+                } · ${netResult.plugins?.length ?? 0} ${t('plugins')}`,
+              )
+            : null,
+      ),
+
       // 后台任务：切走画面回来能看到刚才那次导入的结果
       h(JobList, { jobs, onClear: clearJobHistory, t }),
 
