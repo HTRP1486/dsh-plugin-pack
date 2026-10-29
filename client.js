@@ -130,6 +130,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'net.warnTitle': '安装前请确认来源可信',
     'net.warnBody': '整合包会覆盖已装插件的文件与配置，来源不明的包可能损坏 DeepSeek Harness。安装前会先列出重名插件，由你逐个决定覆盖还是跳过。',
     'net.done': '下载完成，已导入',
+    'net.hintTitle': '可以这样处理：',
     'import.pageTitle': '导入插件整合包',
     'drop.title': '把 zip / tgz 或插件文件夹拖到这里',
     'drop.release': '松手就导入',
@@ -312,6 +313,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'net.warnTitle': 'Verify the source before installing',
     'net.warnBody': 'A bundle overwrites installed plugins and their config. Untrusted sources can damage DeepSeek Harness. You will be asked per-plugin whether to overwrite or skip.',
     'net.done': 'Downloaded and imported',
+    'net.hintTitle': 'What you can do: ',
     'import.pageTitle': 'Import plugin bundle',
     'drop.title': 'Drop a zip / tgz or plugin folder here',
     'drop.release': 'Release to import',
@@ -504,6 +506,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         const error = new Error((data && (data.error || data.message)) || `${response.status} ${response.statusText}`);
         // 把服务端的错误码带出来 —— 界面据此区分"拖错文件"和"真出故障"
         if (data?.code) error.code = String(data.code);
+        // 网络类错误带处置建议（挂代理 / 换网络 / 稍后重试）
+        if (data?.hint) error.hint = String(data.hint);
         throw error;
       }
       return data;
@@ -1459,7 +1463,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           h('div', null, t('net.warnBody')),
         ),
 
-        // 结果区：成功 / 不是整合包 / 其它错误
+        // 结果区：成功 / 不是整合包 / 网络失败（带处置建议）/ 其它错误
         result
           ? h(
               'div',
@@ -1472,7 +1476,29 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                       h('div', { className: 'pp-not-bundle-title' }, t('net.notBundle')),
                       h('div', { className: 'pp-not-bundle-detail' }, String(result.error)),
                     )
-                  : h(Alert, { kind: 'err' }, String(result.error))
+                  : h(
+                      'div',
+                      null,
+                      h(Alert, { kind: 'err' }, String(result.error)),
+                      // 网络类错误：把"该怎么做"单独列出来，别让用户卡在报错上
+                      result.hint
+                        ? h(
+                            'div',
+                            {
+                              className: 'pp-hint',
+                              style: {
+                                marginTop: 6,
+                                padding: '8px 10px',
+                                borderRadius: 8,
+                                background: 'color-mix(in srgb,var(--dsw-alias-label-secondary,#6b7280) 8%,transparent)',
+                                lineHeight: 1.7,
+                              },
+                            },
+                            h('b', null, t('net.hintTitle')),
+                            String(result.hint),
+                          )
+                        : null,
+                    )
                 : h(
                     'div',
                     { className: 'pp-hint' },
@@ -2196,7 +2222,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         await refreshJobs();
       } catch (err) {
         const code = err?.code ? String(err.code) : null;
-        setNetResult({ error: String(err?.message ?? err), code });
+        setNetResult({ error: String(err?.message ?? err), code, hint: err?.hint ?? null });
       } finally {
         setPhase('');
         setBusy(false);
