@@ -219,6 +219,9 @@ test('导入页：拖拽框 + 右上角「添加整合包」按钮，无旧页�
   // 右上角有「添加整合包」按钮（弹窗未打开时不渲染输入框）
   assert.ok(importText.includes('net.button'), '应有「添加整合包」按钮');
   assert.equal(importText.includes('net.dialogTitle'), false, '弹窗默认关闭，不该渲染');
+  // 按钮在 header 那一行（和「刷新」并列），不在内容区当小标题
+  assert.equal(importText.includes('import.pageTitle'), false, '不该再有内容区的「导入插件整合包」标题行');
+  assert.ok(importText.indexOf('net.button') < importText.indexOf('drop.title'), '按钮应在拖拽框之前（header 里）');
 
   // 不该再有旧的支持页签/路径输入框/勾选项/开始导入按钮
   assert.equal(importText.includes('import.source.bundle'), false, '不该再有「整合包」页签');

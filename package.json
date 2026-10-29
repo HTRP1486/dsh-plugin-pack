@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-pack",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "DeepSeek Harness 插件整合包：一键把当前 profile 的第三方插件连依赖和配置导出成 zip（内部每个插件是标准 npm tgz），换机/换 profile 拖进去就能还原。",
   "type": "module",
   "main": "lib/index.js",

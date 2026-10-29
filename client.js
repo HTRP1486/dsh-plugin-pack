@@ -2325,6 +2325,25 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           hotBusy ? h(Spinner, { label: t('hotload.running') }) : t('hotload'),
         ),
         h('button', { className: 'pp-btn sm', disabled: busy, onClick: load }, busy ? h(Spinner, { label: t('loading') }) : t('refresh')),
+        /* 「添加整合包」放在这一行最右，对齐 DSH 自带的「添加插件」位置
+         * （页面标题行右上角），而不是沉到「导入插件整合包」小标题旁边。
+         * 只在导入页出现，其它子页不占位。 */
+        onlyTab === 'import' || tab === 'import'
+          ? h(
+              'button',
+              {
+                className: 'pp-btn sm',
+                style: { display: 'inline-flex', alignItems: 'center', gap: 5 },
+                disabled: busy,
+                onClick: () => {
+                  setNetResult(null);
+                  setNetOpen(true);
+                },
+              },
+              h('span', { style: { fontSize: 14, lineHeight: 1 } }, '＋'),
+              t('net.button'),
+            )
+          : null,
       ),
       error ? h(Alert, { kind: 'err' }, `${t('failed')}: ${error}`) : null,
       hotResult
@@ -2550,35 +2569,6 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const importPage = h(
       'div',
       null,
-      /* 右上角「添加整合包」按钮 —— 和 DSH 自带的「添加插件」同位置同风格。
-       * 点开是一个弹窗，在里面填地址、点安装。 */
-      h(
-        'div',
-        {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-            marginBottom: 12,
-          },
-        },
-        h('div', { style: { fontSize: 14, fontWeight: 600 } }, t('import.pageTitle')),
-        h(
-          'button',
-          {
-            className: 'pp-btn',
-            style: { display: 'inline-flex', alignItems: 'center', gap: 6, flex: 'none' },
-            onClick: () => {
-              setNetResult(null);
-              setNetOpen(true);
-            },
-          },
-          h('span', { style: { fontSize: 15, lineHeight: 1 } }, '＋'),
-          t('net.button'),
-        ),
-      ),
-
       h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
 
       // 后台任务：切走画面回来能看到刚才那次导入的结果
