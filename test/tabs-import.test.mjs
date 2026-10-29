@@ -202,7 +202,7 @@ test('导入页有拖放区，且文案明确说了能拖 zip 和文件夹', asy
   assert.ok(text.includes('drop.hint'), '应有拖放提示文案');
 });
 
-test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多一个网络地址框', async () => {
+test('导入页：拖拽框 + 右上角「添加整合包」按钮，无旧页签', async () => {
   const react = makeReact();
   const mod = await loadClient(react);
   const registered = applyClient(mod);
@@ -212,11 +212,15 @@ test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多
   const tree = expand(importTab.component({ t: (k) => k }), react, 'imp');
   const importText = allText(tree).join(' ');
 
-  // 应有拖拽框
+  // 拖拽框仍在
   assert.ok(importText.includes('drop.title'), '导入页应有拖拽标题');
   assert.ok(importText.includes('drop.hint'), '导入页应有拖拽提示');
 
-  // 不该再有：来源页签、zip 路径输入框、预演/覆盖/还原/建链接勾选、导入按钮
+  // 右上角有「添加整合包」按钮（弹窗未打开时不渲染输入框）
+  assert.ok(importText.includes('net.button'), '应有「添加整合包」按钮');
+  assert.equal(importText.includes('net.dialogTitle'), false, '弹窗默认关闭，不该渲染');
+
+  // 不该再有旧的支持页签/路径输入框/勾选项/开始导入按钮
   assert.equal(importText.includes('import.source.bundle'), false, '不该再有「整合包」页签');
   assert.equal(importText.includes('import.source.plugin'), false, '不该再有「本地插件」页签');
   assert.equal(importText.includes('import.pathHint'), false, '不该再有 zip 路径输入框');
@@ -225,12 +229,7 @@ test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多
   assert.equal(importText.includes('import.link'), false, '不该再有「建链接」勾选');
   assert.equal(importText.includes('import.run'), false, '不该再有「开始导入」按钮');
 
-  // 从网络安装：允许，但要说明它会先校验是不是整合包
-  assert.ok(importText.includes('net.title'), '应有「从网络安装」入口');
-  assert.ok(importText.includes('net.desc'), '应说明支持哪些来源、会做校验');
-  assert.ok(importText.includes('net.go'), '应有下载安装按钮');
-
-  // input 统计：DropZone 的隐藏 file input + 网络地址框（1 个 text）而已
+  // 弹窗关着时，页面上只该有拖拽框内部那一个隐藏 file input
   let inputs = 0;
   let textInputs = 0;
   const walk = (node) => {
@@ -246,9 +245,8 @@ test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多
     for (const child of node.children ?? []) walk(child);
   };
   walk(tree);
-  // 拖拽框内部有一个隐藏的 <input type=file>，加上网络地址框，最多两个
-  assert.ok(inputs <= 2, `导入页最多两个 input（隐藏 file + 网络地址），实际 ${inputs}`);
-  assert.equal(textInputs, 1, '只该有一个文本框（网络地址）');
+  assert.equal(inputs, 1, `弹窗关闭时只该有隐藏 file input，实际 ${inputs}`);
+  assert.equal(textInputs, 0, '弹窗关闭时不该有文本框');
 
   // 导出页：手动范围切换已删除，改为按勾选数量自动判断
   const exportTab = registered.find((item) => item.spec.id === 'plugin-pack-export');
@@ -261,6 +259,26 @@ test('导入页为主是拖拽框：没有旧页签/路径框/勾选项，只多
 });
 
 /* --------------------------- 本地插件导入行为 --------------------------- */
+
+test('「添加整合包」弹窗：结构与自带「添加插件」对齐', async () => {
+  const src = fs.readFileSync(clientFile, 'utf8');
+  // 组件存在且以 open 控制
+  assert.ok(src.includes('function AddBundleDialog'), '应有 AddBundleDialog 组件');
+  assert.ok(/if \(!open\) return null/.test(src), '未打开时不该渲染');
+  // 关键结构：标题、说明、输入框、示例折叠、提示块、整宽按钮
+  assert.ok(src.includes('net.dialogTitle'), '应有弹窗标题');
+  assert.ok(src.includes('net.desc'), '应有说明文字');
+  assert.ok(src.includes('autoFocus: true'), '输入框应自动聚焦');
+  assert.ok(src.includes('net.examples'), '应有可折叠的来源示例');
+  assert.ok(src.includes('net.warnTitle'), '应有来源可信提示');
+  assert.ok(src.includes('net.warnBody'), '提示应说明覆盖风险');
+  assert.ok(src.includes("width: '100%'"), '安装按钮应整宽（对齐自带弹窗）');
+  // Esc 关闭 + 点遮罩关闭，但跑的时候不关
+  assert.ok(/event\.key === 'Escape'/.test(src), '应支持 Esc 关闭');
+  assert.ok(/onClick: \(\) => !busy && onClose\(\)/.test(src), '点遮罩关闭，运行时不关');
+  // 回车即安装
+  assert.ok(/event\.key === 'Enter'/.test(src), '输入框回车应触发安装');
+});
 
 const FIXTURE = path.join(os.tmpdir(), 'local-plugin-fixture');
 const FAKE_PROFILE = path.join(os.tmpdir(), 'local-plugin-profile');

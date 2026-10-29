@@ -113,11 +113,24 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.checking': '正在检查冲突…',
     'import.downloading': '正在从网络下载…',
     'net.title': '从网络安装',
-    'net.desc': '支持 GitHub 仓库 / Release / 直链，或 npm 包名。下载后会校验是不是整合包。',
-    'net.placeholder': 'https://github.com/用户/仓库  或  dsh-plugin-pack  或  https://.../x.zip',
+    'net.desc': '输入插件整合包的来源：GitHub 仓库 / Release / 直链，或 npm 包名。下载后会校验它是不是整合包。',
+    'net.placeholder': '例如 dsh-plugin-pack 或 https://github.com/用户/仓库',
     'net.go': '下载并安装',
     'net.running': '正在处理…',
     'net.notBundle': '下载到的不是整合包',
+    'net.button': '添加整合包',
+    'net.dialogTitle': '添加整合包',
+    'net.install': '下载并安装',
+    'net.close': '关闭',
+    'net.examples': '来源示例',
+    'net.ex1': '下载仓库归档',
+    'net.ex2': '取该 Release 里的 zip 附件',
+    'net.ex3': '任意直链',
+    'net.ex4': 'npm 包（单插件）',
+    'net.warnTitle': '安装前请确认来源可信',
+    'net.warnBody': '整合包会覆盖已装插件的文件与配置，来源不明的包可能损坏 DeepSeek Harness。安装前会先列出重名插件，由你逐个决定覆盖还是跳过。',
+    'net.done': '下载完成，已导入',
+    'import.pageTitle': '导入插件整合包',
     'drop.title': '把 zip / tgz 或插件文件夹拖到这里',
     'drop.release': '松手就导入',
     'drop.running': '正在导入…',
@@ -282,11 +295,24 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.checking': 'Checking for conflicts…',
     'import.downloading': 'Downloading…',
     'net.title': 'Install from network',
-    'net.desc': 'GitHub repo / release / direct link, or an npm package name. We verify it is a bundle after download.',
-    'net.placeholder': 'https://github.com/user/repo  ·  dsh-plugin-pack  ·  https://.../x.zip',
+    'net.desc': 'Enter a bundle source: GitHub repo / release / direct link, or an npm package name. We verify it is a bundle after download.',
+    'net.placeholder': 'e.g. dsh-plugin-pack or https://github.com/user/repo',
     'net.go': 'Download and install',
     'net.running': 'Working…',
     'net.notBundle': 'Downloaded file is not a bundle',
+    'net.button': 'Add bundle',
+    'net.dialogTitle': 'Add bundle',
+    'net.install': 'Download and install',
+    'net.close': 'Close',
+    'net.examples': 'Source examples',
+    'net.ex1': 'download repo archive',
+    'net.ex2': 'pick the zip asset of that release',
+    'net.ex3': 'any direct link',
+    'net.ex4': 'npm package (single plugin)',
+    'net.warnTitle': 'Verify the source before installing',
+    'net.warnBody': 'A bundle overwrites installed plugins and their config. Untrusted sources can damage DeepSeek Harness. You will be asked per-plugin whether to overwrite or skip.',
+    'net.done': 'Downloaded and imported',
+    'import.pageTitle': 'Import plugin bundle',
     'drop.title': 'Drop a zip / tgz or plugin folder here',
     'drop.release': 'Release to import',
     'drop.running': 'Importing…',
@@ -1287,6 +1313,191 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
    * @param {() => void} props.onCancel
    * @param {(msg: string) => string} props.t
    */
+  /**
+   * 「添加整合包」弹窗。
+   *
+   * 布局对齐 DSH 自带的「添加插件」：
+   *   标题 → 说明 → 输入框 → 折叠的示例 → 提示块 → 大按钮
+   *
+   * 下载后会校验是不是整合包；不是就当场用醒目样式报出来，
+   * 不会让你以为"装上了"结果其实是普通压缩包。
+   *
+   * @param {object} props
+   * @param {boolean} props.open
+   * @param {string} props.value 输入框内容
+   * @param {(v: string) => void} props.onChange
+   * @param {object|null} props.result 上一次下载的结果或错误
+   * @param {boolean} props.busy
+   * @param {string} props.phase 进度文案
+   * @param {() => void} props.onInstall
+   * @param {() => void} props.onClose
+   * @param {(key: string) => string} props.t
+   */
+  function AddBundleDialog({ open, value, onChange, result, busy, phase, onInstall, onClose, t }) {
+    const [showExamples, setShowExamples] = useState(false);
+
+    // Esc 关闭
+    useEffect(() => {
+      if (!open) return;
+      const onKey = (event) => {
+        if (event.key === 'Escape' && !busy) onClose();
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [open, busy, onClose]);
+
+    if (!open) return null;
+
+    const isNotBundle =
+      ['NOT_A_BUNDLE', 'NOT_A_ZIP', 'BAD_FORMAT', 'BAD_MANIFEST', 'BAD_PACK'].includes(String(result?.code ?? '')) ||
+      /不是整合包|没有 manifest|不是插件包/i.test(String(result?.error ?? ''));
+
+    return h(
+      'div',
+      {
+        style: {
+          position: 'fixed',
+          inset: 0,
+          zIndex: 10070,
+          background: 'rgba(0,0,0,.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+        },
+        // 点遮罩关闭（跑的时候不关，避免误触中断）
+        onClick: () => !busy && onClose(),
+      },
+      h(
+        'div',
+        {
+          style: {
+            width: 'min(560px, 100%)',
+            background: 'var(--dsw-alias-bg-layer-1,#fff)',
+            borderRadius: 14,
+            padding: '20px 20px 16px',
+            boxShadow: '0 12px 40px rgba(0,0,0,.22)',
+            border: '.5px solid var(--dsw-alias-border-l1,#e6e6e6)',
+          },
+          onClick: (event) => event.stopPropagation(),
+        },
+        // 标题行 + 关闭
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 } },
+          h('h2', { style: { margin: 0, fontSize: 17, fontWeight: 600, flex: 1 } }, t('net.dialogTitle')),
+          h(
+            'button',
+            {
+              className: 'pp-btn sm',
+              style: { flex: 'none', padding: '2px 8px' },
+              disabled: busy,
+              onClick: onClose,
+              title: t('net.close'),
+            },
+            '✕',
+          ),
+        ),
+        h('p', { className: 'pp-hint', style: { margin: '0 0 12px' } }, t('net.desc')),
+
+        // 输入框（自动聚焦，回车即安装）
+        h('input', {
+          className: 'pp-input pp-mono',
+          type: 'text',
+          autoFocus: true,
+          value,
+          placeholder: t('net.placeholder'),
+          disabled: busy,
+          onInput: (event) => onChange(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && !busy && value.trim()) onInstall();
+          },
+          style: { width: '100%', boxSizing: 'border-box', fontSize: 12.5, padding: '9px 11px' },
+        }),
+
+        // 折叠的示例（对齐自带弹窗的「安装引导和示例」）
+        h(
+          'div',
+          { style: { margin: '10px 0 0' } },
+          h(
+            'button',
+            {
+              className: 'pp-btn sm',
+              style: { padding: '2px 0', background: 'none', border: 'none', color: 'var(--dsw-alias-label-secondary,#6b7280)' },
+              onClick: () => setShowExamples((v) => !v),
+            },
+            `${showExamples ? '▾' : '▸'} ${t('net.examples')}`,
+          ),
+          showExamples
+            ? h(
+                'div',
+                { className: 'pp-hint', style: { marginTop: 6, lineHeight: 1.9 } },
+                h('div', null, h('code', null, 'https://github.com/用户/仓库'), `  ${t('net.ex1')}`),
+                h('div', null, h('code', null, 'https://github.com/用户/仓库/releases/tag/v1.0.0'), `  ${t('net.ex2')}`),
+                h('div', null, h('code', null, 'https://example.com/backup.zip'), `  ${t('net.ex3')}`),
+                h('div', null, h('code', null, 'dsh-plugin-pack'), `  ${t('net.ex4')}`),
+              )
+            : null,
+        ),
+
+        // 提示块（对齐自带的黄色提示）
+        h(
+          'div',
+          {
+            style: {
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d97706) 8%,transparent)',
+              border: '.5px solid color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d97706) 35%,transparent)',
+              fontSize: 12,
+              lineHeight: 1.7,
+              color: 'var(--dsw-alias-label-secondary,#6b7280)',
+            },
+          },
+          h('div', { style: { fontWeight: 600, marginBottom: 2 } }, `⚠ ${t('net.warnTitle')}`),
+          h('div', null, t('net.warnBody')),
+        ),
+
+        // 结果区：成功 / 不是整合包 / 其它错误
+        result
+          ? h(
+              'div',
+              { style: { marginTop: 12 } },
+              result.error
+                ? isNotBundle
+                  ? h(
+                      'div',
+                      { className: 'pp-not-bundle' },
+                      h('div', { className: 'pp-not-bundle-title' }, t('net.notBundle')),
+                      h('div', { className: 'pp-not-bundle-detail' }, String(result.error)),
+                    )
+                  : h(Alert, { kind: 'err' }, String(result.error))
+                : h(
+                    'div',
+                    { className: 'pp-hint' },
+                    `✓ ${t('net.done')} · ${result.from ?? ''} · ${result.name ?? ''} · ${
+                      result.bytes ? (result.bytes / 1048576).toFixed(1) + ' MiB' : ''
+                    } · ${result.plugins?.length ?? 0} ${t('plugins')}`,
+                  ),
+            )
+          : null,
+
+        // 大按钮（对齐自带的整宽「安装」）
+        h(
+          'button',
+          {
+            className: 'pp-btn primary',
+            style: { width: '100%', marginTop: 14, padding: '10px 12px', boxSizing: 'border-box' },
+            disabled: busy || !value.trim(),
+            onClick: onInstall,
+          },
+          busy ? h(Spinner, { label: phase || t('net.running') }) : t('net.install'),
+        ),
+      ),
+    );
+  }
+
   function ConflictDialog({ pending, onConfirm, onCancel, t }) {
     const conflicts = pending?.conflicts ?? [];
     /** 初始全部选「覆盖」——多数人是想升级到新版本。 */
@@ -1611,6 +1822,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const [netSource, setNetSource] = useState('');
     /** 网络安装的结果/错误。 */
     const [netResult, setNetResult] = useState(null);
+    /** 「添加整合包」弹窗是否打开。 */
+    const [netOpen, setNetOpen] = useState(false);
     /** 后台任务列表：切走画面回来靠它恢复 */
     const [jobs, setJobs] = useState([]);
     /** 体积上限（MiB），0 = 不限制。默认跟着服务端配置走。 */
@@ -1941,6 +2154,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           setImportResult(result);
           await load();
           await refreshJobs();
+          // 装完关掉弹窗，回到列表看结果
+          setNetOpen(false);
           return;
         }
 
@@ -1956,15 +2171,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
             conflicts,
             plugins: preview.plugins ?? [],
           });
-          setNetResult({
-            ok: true,
-            downloaded: true,
-            file: fetched.file,
-            from: fetched.from,
-            name: fetched.name,
-            bytes: fetched.bytes,
-            plugins: fetched.plugins,
-          });
+          // 交给冲突弹窗接管，先关掉来源弹窗
+          setNetOpen(false);
           return;
         }
 
@@ -2342,66 +2550,36 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const importPage = h(
       'div',
       null,
-      h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
-
-      /* 从网络安装：GitHub / npm / 直链。
-       * 下载后服务端会校验它真的是整合包（inspectBundle），
-       * 不是就明确报「下载到的不是整合包」，不会硬导进去。 */
+      /* 右上角「添加整合包」按钮 —— 和 DSH 自带的「添加插件」同位置同风格。
+       * 点开是一个弹窗，在里面填地址、点安装。 */
       h(
         'div',
-        { className: 'pp-card', style: { marginTop: 14 } },
-        h('h3', { style: { margin: '0 0 4px', fontSize: 14, fontWeight: 600 } }, t('net.title')),
-        h('p', { className: 'pp-hint', style: { margin: '0 0 10px' } }, t('net.desc')),
+        {
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            marginBottom: 12,
+          },
+        },
+        h('div', { style: { fontSize: 14, fontWeight: 600 } }, t('import.pageTitle')),
         h(
-          'div',
-          { style: { display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' } },
-          h('input', {
-            className: 'pp-input pp-mono',
-            type: 'text',
-            value: netSource,
-            placeholder: t('net.placeholder'),
-            disabled: busy,
-            onInput: (event) => setNetSource(event.target.value),
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' && !busy) runNetworkInstall();
+          'button',
+          {
+            className: 'pp-btn',
+            style: { display: 'inline-flex', alignItems: 'center', gap: 6, flex: 'none' },
+            onClick: () => {
+              setNetResult(null);
+              setNetOpen(true);
             },
-            style: { flex: '1 1 260px', minWidth: 0, fontSize: 12 },
-          }),
-          h(
-            'button',
-            {
-              className: 'pp-btn',
-              disabled: busy || !netSource.trim(),
-              onClick: runNetworkInstall,
-            },
-            busy ? t('net.running') : t('net.go'),
-          ),
+          },
+          h('span', { style: { fontSize: 15, lineHeight: 1 } }, '＋'),
+          t('net.button'),
         ),
-        // 结果：下载成功 / 不是整合包 / 其它错误
-        netResult?.error
-          ? h(
-              'div',
-              { style: { marginTop: 10 } },
-              ['NOT_A_BUNDLE', 'NOT_A_ZIP', 'BAD_FORMAT', 'BAD_MANIFEST', 'BAD_PACK'].includes(String(netResult.code ?? '')) ||
-              /不是整合包|没有 manifest/i.test(String(netResult.error))
-                ? h(
-                    'div',
-                    { className: 'pp-not-bundle' },
-                    h('div', { className: 'pp-not-bundle-title' }, t('net.notBundle')),
-                    h('div', { className: 'pp-not-bundle-detail' }, String(netResult.error)),
-                  )
-                : h(Alert, { kind: 'err' }, netResult.error),
-            )
-          : netResult?.ok
-            ? h(
-                'div',
-                { className: 'pp-hint', style: { marginTop: 8 } },
-                `✓ ${netResult.from} · ${netResult.name ?? ''} · ${
-                  netResult.bytes ? (netResult.bytes / 1048576).toFixed(1) + ' MiB' : ''
-                } · ${netResult.plugins?.length ?? 0} ${t('plugins')}`,
-              )
-            : null,
       ),
+
+      h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
 
       // 后台任务：切走画面回来能看到刚才那次导入的结果
       h(JobList, { jobs, onClear: clearJobHistory, t }),
@@ -2692,6 +2870,19 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           const looksLikeFile = /\.[a-z0-9]{2,8}$/i.test(picked);
           setOut(looksLikeFile || picked.endsWith('\\') || picked.endsWith('/') ? picked : `${picked}\\`);
         },
+      }),
+      /* 「添加整合包」弹窗：带来源输入 + 校验提示 + 整宽安装按钮，
+       * 布局对齐 DSH 自带的「添加插件」弹窗。 */
+      h(AddBundleDialog, {
+        open: netOpen,
+        value: netSource,
+        onChange: setNetSource,
+        result: netResult,
+        busy,
+        phase,
+        onInstall: runNetworkInstall,
+        onClose: () => setNetOpen(false),
+        t,
       }),
       // 重名冲突弹窗：叠在最上层
       h(ConflictDialog, {
