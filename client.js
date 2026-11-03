@@ -103,6 +103,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.restoreData': '还原数据目录',
     'import.link': '建立 node_modules 链接',
     'import.done': '导入完成',
+    'import.written': '已写入磁盘',
+    'import.whyNotListed':
+      '文件、依赖和配置都已经写到 profile 里了。「已安装」列表是 dsh 启动时读取的，重启后新插件才会出现在那里 —— 现在没显示不代表没装上。',
     'import.restart': '重启 dsh 后生效',
     'import.empty': '先选一个 zip 文件',
     'import.source.bundle': '整合包',
@@ -286,6 +289,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'import.restoreData': 'Restore data dirs',
     'import.link': 'Link node_modules',
     'import.done': 'Import finished',
+    'import.written': 'Written to disk',
+    'import.whyNotListed':
+      'Files, dependencies and config are already written into the profile. The "Installed" list is read by dsh at startup, so new plugins appear there only after a restart — not showing now does not mean it failed.',
     'import.restart': 'Restart dsh to apply',
     'import.empty': 'Choose a zip first',
     'import.source.bundle': 'Bundle',
@@ -2626,8 +2632,14 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                 { kind: 'ok' },
                 importResult.dryRun
                   ? `${t('import.dry')} · ${importResult.plugins?.length ?? 0} ${t('plugins')}`
-                  : `${t('import.done')} · ${t('import.restart')}`,
+                  : `${t('import.written')} · ${importResult.plugins?.length ?? 0} ${t('plugins')} · ${t('import.restart')}`,
               ),
+              /* 说清楚为什么"已安装"列表里还看不到：
+               * 那个列表是 dsh 启动时读 profile 生成的，运行中不会自己刷新。
+               * 文件现在确实已经在磁盘上了 —— 不说明这点用户会以为装失败。 */
+              !importResult.dryRun
+                ? h('div', { className: 'pp-hint', style: { margin: '6px 0 0' } }, t('import.whyNotListed'))
+                : null,
               importResult.plugins?.length
                 ? h(
                     'table',
