@@ -92,6 +92,10 @@ test('回滚后：依赖与 bundles 只撤销本次导入的', async () => {
   const profile = makeProfile('pkg-scope');
 
   // 预置一个用户自己的依赖 + bundle
+  // （目录必须真实存在，否则回滚后的自动对账会把它当成僵尸条目清掉）
+  const ownDir = path.join(profile, 'local-plugins', 'my-own-plugin');
+  fs.mkdirSync(ownDir, { recursive: true });
+  fs.writeFileSync(path.join(ownDir, 'package.json'), JSON.stringify({ name: 'my-own-plugin', version: '1.0.0' }));
   const pkgFile = path.join(profile, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
   pkg.dependencies['my-own-plugin'] = 'link:./local-plugins/my-own-plugin';
