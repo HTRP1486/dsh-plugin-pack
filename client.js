@@ -580,7 +580,12 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     api('/plugin-pack/browse', { method: 'POST', body: JSON.stringify({ dir, create: Boolean(options.create) }) });
   const doHotload = (pkg) => api('/plugin-pack/hotload', { method: 'POST', body: JSON.stringify({ package: pkg }) });
   const getClientStatus = (pkg) => api(`/plugin-pack/client?package=${encodeURIComponent(pkg ?? 'dsh-plugin-pack')}`);
-  const doImportPlugin = (dir) => api('/plugin-pack/import-plugin', { method: 'POST', body: JSON.stringify({ dir }) });
+  /** 导入一个本地插件目录（dryRun=true 时只预览冲突，不写盘）。 */
+  const doImportPlugin = (dir, dryRun = false) =>
+    api('/plugin-pack/import-plugin', {
+      method: 'POST',
+      body: JSON.stringify({ dir, dryRun, enable: installPrefs.enable }),
+    });
   /** 后台任务列表（进行中 + 已完成）。 */
   const getJobs = () => api('/plugin-pack/jobs?limit=20');
   const clearJobs = () => api('/plugin-pack/jobs/clear', { method: 'POST', body: '{}' });
@@ -2395,20 +2400,55 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         }
         setPhase(t('import.checking'));
 
-        /* 下载到的可能是两种：
-         *   kind='plugin' → npm 包 / 单插件 tgz，走 tgz 导入
-         *   kind='bundle' → 整合包 zip，走整合包导入（可能要先问冲突） */
+        /* 下载到的可能是三种：
+         *   kind='plugin' + file → npm 包 / 单插件 tgz
+         *   kind='plugin' + dir  → 单个插件的原仓库（GitHub 归档解出来的目录）
+         *   kind='bundle'        → 整合包 zip，可能要先问冲突 */
         if (fetched.kind === 'plugin') {
-          const result = await doImport({
-            file: fetched.file,
-            dryRun: false,
-            mode: 'merge',
-            linkNodeModules: true,
-          });
+          // 仓库来的单插件：先 dryRun 看有没有同名已装，有就弹确认框
+          if (fetched.dir) {
+            const preview = await doImportPlugin(fetched.dir, true);
+            const existingRow = preview?.conflicts?.[0] ?? null;
+            if (existingRow || preview?.plan) {
+              const row = {
+                name: fetched.plugins?.[0]?.name ?? preview?.name ?? '(未知插件)',
+                version: fetched.plugins?.[0]?.version ?? preview?.version ?? null,
+                installedVersion: existingRow?.installedVersion ?? null,
+                dest: existingRow?.dest ?? null,
+                sameVersion: Boolean(existingRow?.sameVersion),
+                older: Boolean(existingRow?.older),
+                installSource: existingRow?.installSource ?? null,
+                exists: Boolean(existingRow),
+              };
+              setPendingImport({
+                kind: 'plugin-dir',
+                pendingDir: fetched.dir,
+                file: null,
+                conflicts: row.exists ? [row] : [],
+                rows: [row],
+                plugins: fetched.plugins ?? [],
+                from: fetched.from,
+              });
+              setNetOpen(false);
+              setBusy(false);
+              setPhase('');
+              return;
+            }
+          }
+
+          const result = fetched.dir
+            ? await doImportPlugin(fetched.dir)
+            : await doImport({
+                file: fetched.file,
+                dryRun: false,
+                mode: 'merge',
+                linkNodeModules: true,
+              });
           setNetResult({
             ok: true,
             kind: 'plugin',
-            file: fetched.file,
+            file: fetched.file ?? null,
+            dir: fetched.dir ?? null,
             from: fetched.from,
             name: fetched.name,
             bytes: fetched.bytes,
@@ -2493,6 +2533,26 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       setBusy(true);
       setImportResult(null);
       try {
+        /* 单插件仓库（GitHub 归档解出来的目录）：直接按目录导入。
+         * 目录导入没有 decisions 的概念（一个插件一个决定），
+         * 用户点了「开始导入」就等于选覆盖。 */
+        if (pending.kind === 'plugin-dir' && pending.pendingDir) {
+          setPhase(t('import.checking'));
+          const dirResult = await doImportPlugin(pending.pendingDir);
+          setNetResult({
+            ok: true,
+            kind: 'plugin',
+            dir: pending.pendingDir,
+            from: pending.from ?? null,
+            plugins: pending.plugins ?? [],
+          });
+          setImportResult(dirResult);
+          rememberEnableState(dirResult);
+          await load();
+          await refreshJobs();
+          return;
+        }
+
         /* quick 模式：拖进来时只读了 zip 尾部就弹了冲突窗，文件还没上传。
          * 现在用户确认了，才真正把文件传上去。 */
         let file = pending.file;
