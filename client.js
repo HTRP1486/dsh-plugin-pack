@@ -187,6 +187,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'jobs.failed': '失败',
     'jobs.clear': '清空已完成',
     'conflict.title': '这些插件已经装过了',
+    'conflict.titleNew': '确认导入',
+    'conflict.subtitleAll': '个插件待安装',
+    'conflict.create': '新建',
     'conflict.subtitle': '个插件与已安装的重名，请选择如何处理：',
     'conflict.overwrite': '覆盖',
     'conflict.skip': '跳过',
@@ -380,6 +383,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'jobs.failed': 'Failed',
     'jobs.clear': 'Clear finished',
     'conflict.title': 'These plugins are already installed',
+    'conflict.titleNew': 'Confirm import',
+    'conflict.subtitleAll': 'plugins to install',
+    'conflict.create': 'New',
     'conflict.subtitle': 'plugins already exist. Choose what to do:',
     'conflict.overwrite': 'Overwrite',
     'conflict.skip': 'Skip',
@@ -546,8 +552,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
 
   /* 安装偏好：由界面上的「安装后立即启用」勾选同步过来。
    * 放这里是因为 doImport 在接口层、拿不到组件 state；
-   * 用一个普通对象透传，避免把选项硬编码进每个调用点。 */
-  const installPrefs = { enable: true };
+   * 用一个普通对象透传，避免把选项硬编码进每个调用点。
+   * 默认 false：装完先不启用，由用户自己决定（更安全，也避免"装了没用的插件"). */
+  const installPrefs = { enable: false };
 
   const getStatus = () => api('/plugin-pack/status');
   const doExport = (body) => api('/plugin-pack/export', { method: 'POST', body: JSON.stringify(body) });
@@ -1553,7 +1560,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           },
           h('input', {
             type: 'checkbox',
-            checked: enableOnInstall !== false,
+            checked: Boolean(enableOnInstall),
             disabled: busy,
             onChange: (event) => onToggleEnable?.(event.target.checked),
           }),
@@ -1576,10 +1583,18 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
   }
 
   function ConflictDialog({ pending, onConfirm, onCancel, t }) {
+    /**
+     * 弹窗列的是包里的**所有**插件，不只是重名的。
+     *   - 重名的（exists=true）→ 可选「覆盖 / 跳过」
+     *   - 新的（exists=false）  → 标「新建」，没有二选一
+     * 这样用户在真正写盘之前，能看清这次到底要装什么。
+     */
     const conflicts = pending?.conflicts ?? [];
+    const rows = pending?.rows ?? conflicts;
+    const existing = rows.filter((item) => item.exists);
     /** 初始全部选「覆盖」——多数人是想升级到新版本。 */
     const [decisions, setDecisions] = useState(() =>
-      Object.fromEntries(conflicts.map((item) => [item.name, 'overwrite'])),
+      Object.fromEntries(existing.map((item) => [item.name, 'overwrite'])),
     );
 
     // 弹窗打开时挂 Esc
@@ -1593,9 +1608,10 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
 
     if (!pending) return null;
 
-    const setAll = (value) => setDecisions(Object.fromEntries(conflicts.map((item) => [item.name, value])));
+    const setAll = (value) => setDecisions(Object.fromEntries(existing.map((item) => [item.name, value])));
     const overwriteCount = Object.values(decisions).filter((v) => v === 'overwrite').length;
     const skipCount = Object.values(decisions).filter((v) => v === 'skip').length;
+    const createCount = rows.length - existing.length;
 
     return h(
       'div',
@@ -1632,30 +1648,38 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         h(
           'div',
           { style: { padding: '12px 16px', borderBottom: '.5px solid var(--dsw-alias-border-l1,#eee)' } },
-          h('b', { style: { fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 4 } }, t('conflict.title')),
+          h(
+            'b',
+            { style: { fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 4 } },
+            existing.length ? t('conflict.title') : t('conflict.titleNew'),
+          ),
           h(
             'span',
             { className: 'pp-hint' },
-            `${conflicts.length} ${t('conflict.subtitle')}`,
+            existing.length
+              ? `${rows.length} ${t('conflict.subtitleAll')} · ${existing.length} ${t('conflict.subtitle')}`
+              : `${rows.length} ${t('conflict.subtitleAll')}`,
           ),
         ),
-        // 一键按钮
-        h(
-          'div',
-          { className: 'pp-bar', style: { padding: '10px 16px 0', marginBottom: 0 } },
-          h('button', { className: 'pp-btn sm', onClick: () => setAll('overwrite') }, t('conflict.allOverwrite')),
-          h('button', { className: 'pp-btn sm', onClick: () => setAll('skip') }, t('conflict.allSkip')),
-          h(
-            'span',
-            { className: 'pp-hint', style: { marginLeft: 'auto' } },
-            `${t('conflict.overwrite')} ${overwriteCount} · ${t('conflict.skip')} ${skipCount}`,
-          ),
-        ),
-        // 列表
+        // 一键按钮（只有存在重名时才有意义）
+        existing.length
+          ? h(
+              'div',
+              { className: 'pp-bar', style: { padding: '10px 16px 0', marginBottom: 0 } },
+              h('button', { className: 'pp-btn sm', onClick: () => setAll('overwrite') }, t('conflict.allOverwrite')),
+              h('button', { className: 'pp-btn sm', onClick: () => setAll('skip') }, t('conflict.allSkip')),
+              h(
+                'span',
+                { className: 'pp-hint', style: { marginLeft: 'auto' } },
+                `${t('conflict.overwrite')} ${overwriteCount} · ${t('conflict.skip')} ${skipCount}`,
+              ),
+            )
+          : null,
+        // 列表：全部插件
         h(
           'div',
           { style: { flex: 1, minHeight: 120, overflow: 'auto', padding: '8px 16px' } },
-          conflicts.map((item) =>
+          rows.map((item) =>
             h(
               'div',
               {
@@ -1670,34 +1694,49 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                   'div',
                   { className: 'pp-name' },
                   item.name,
-                  item.installedVersion
+                  item.exists && item.installedVersion
                     ? h('span', { className: 'pp-ver' }, `${item.installedVersion} → ${item.version}`)
                     : h('span', { className: 'pp-ver' }, item.version),
-                  item.sameVersion ? h('span', { className: 'pp-ver' }, t('conflict.sameVersion')) : null,
+                  item.exists && item.sameVersion
+                    ? h('span', { className: 'pp-ver' }, t('conflict.sameVersion'))
+                    : null,
                 ),
-                h('div', { className: 'pp-meta pp-mono', style: { fontSize: 11 } }, item.dest),
+                item.dest ? h('div', { className: 'pp-meta pp-mono', style: { fontSize: 11 } }, item.dest) : null,
               ),
-              // 每个插件单独选
-              h(
-                'div',
-                { style: { display: 'flex', gap: 4, flex: 'none' } },
-                h(
-                  'button',
-                  {
-                    className: `pp-btn sm${decisions[item.name] === 'overwrite' ? ' primary' : ''}`,
-                    onClick: () => setDecisions((prev) => ({ ...prev, [item.name]: 'overwrite' })),
-                  },
-                  t('conflict.overwrite'),
-                ),
-                h(
-                  'button',
-                  {
-                    className: `pp-btn sm${decisions[item.name] === 'skip' ? ' primary' : ''}`,
-                    onClick: () => setDecisions((prev) => ({ ...prev, [item.name]: 'skip' })),
-                  },
-                  t('conflict.skip'),
-                ),
-              ),
+              // 重名的给二选一；新的只标「新建」
+              item.exists
+                ? h(
+                    'div',
+                    { style: { display: 'flex', gap: 4, flex: 'none' } },
+                    h(
+                      'button',
+                      {
+                        className: `pp-btn sm${decisions[item.name] === 'overwrite' ? ' primary' : ''}`,
+                        onClick: () => setDecisions((prev) => ({ ...prev, [item.name]: 'overwrite' })),
+                      },
+                      t('conflict.overwrite'),
+                    ),
+                    h(
+                      'button',
+                      {
+                        className: `pp-btn sm${decisions[item.name] === 'skip' ? ' primary' : ''}`,
+                        onClick: () => setDecisions((prev) => ({ ...prev, [item.name]: 'skip' })),
+                      },
+                      t('conflict.skip'),
+                    ),
+                  )
+                : h(
+                    'span',
+                    {
+                      className: 'pp-pill',
+                      style: {
+                        flex: 'none',
+                        background: 'color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 14%,transparent)',
+                        color: 'var(--dsw-alias-state-success-primary,#15803d)',
+                      },
+                    },
+                    t('conflict.create'),
+                  ),
             ),
           ),
         ),
@@ -1710,9 +1749,16 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               borderTop: '.5px solid var(--dsw-alias-border-l1,#eee)',
               display: 'flex',
               gap: 8,
-              justifyContent: 'flex-end',
+              alignItems: 'center',
             },
           },
+          h(
+            'span',
+            { className: 'pp-hint', style: { flex: 1 } },
+            existing.length
+              ? `${t('conflict.overwrite')} ${overwriteCount} · ${t('conflict.skip')} ${skipCount} · ${t('conflict.create')} ${createCount}`
+              : `${t('conflict.create')} ${createCount}`,
+          ),
           h('button', { className: 'pp-btn', onClick: onCancel }, t('conflict.cancel')),
           h(
             'button',
@@ -1901,8 +1947,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const [netResult, setNetResult] = useState(null);
     /** 「添加整合包」弹窗是否打开。 */
     const [netOpen, setNetOpen] = useState(false);
-    /** 安装后是否立即启用（勾选框）。关掉 → 只装文件，不进 bundles。 */
-    const [enableOnInstall, setEnableOnInstall] = useState(true);
+    /** 安装后是否立即启用（勾选框）。默认关：先装上，用户想用再启用。 */
+    const [enableOnInstall, setEnableOnInstall] = useState(false);
     /** 刚装完的插件及其启用状态，用于装完后再切换。 */
     const [enablePrompt, setEnablePrompt] = useState(null);
     /** 后台任务列表：切走画面回来靠它恢复 */
@@ -2151,21 +2197,35 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               return;
             }
 
-            if (conflicts.length) {
-              /* 先把冲突列表给出来，用户选完才上传 + 真导入。
-               * 这时还没上传，所以待决策任务在服务端也不存在 —— 全靠确认时再登记。 */
-              setPendingImport({
-                kind: 'bundle',
-                pendingFile: file, // 还没上传，先拿着 File 对象
-                file: null,
-                conflicts,
-                plugins: packPlugins,
-                quick: true,
-              });
-              setBusy(false);
-              setPhase('');
-              return;
-            }
+            /* 不管有没有重名，都在写盘之前弹一次确认框，列出包里所有插件：
+             *   - 重名的 → 覆盖 / 跳过
+             *   - 新的   → 标「新建」
+             * 这时文件还没上传，取消就什么都不发生。 */
+            const rows = packPlugins.map((plugin) => {
+              const hit = installed.get(plugin.name);
+              return {
+                name: plugin.name,
+                version: plugin.version ?? null,
+                installedVersion: hit?.version ?? null,
+                dest: hit?.dir ?? null,
+                bytes: plugin.bytes ?? null,
+                sameVersion: (hit?.version ?? null) === (plugin.version ?? null),
+                exists: Boolean(hit),
+              };
+            });
+
+            setPendingImport({
+              kind: 'bundle',
+              pendingFile: file, // 还没上传，先拿着 File 对象
+              file: null,
+              conflicts: rows.filter((row) => row.exists),
+              rows,
+              plugins: packPlugins,
+              quick: true,
+            });
+            setBusy(false);
+            setPhase('');
+            return;
           }
 
           // 第二步：确认无冲突（或拿不到快速清单）才上传
@@ -2173,18 +2233,32 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           const uploaded = await uploadZip(file);
           setZipPath(uploaded.file);
 
-          // 先 dryRun 探一次：有重名冲突就弹窗让用户决定
+          // 先 dryRun 探一次：拿到完整插件清单，写盘前弹确认
           setPhase(t('import.checking'));
           const preview = await doImport({ file: uploaded.file, dryRun: true });
           const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
-          if (conflicts.length) {
-            // 服务端在 dryRun 时已登记了"待决策"任务，带 jobId 回来
+          const conflictByName = new Map(conflicts.map((item) => [item.name, item]));
+          const previewRows = (preview?.plugins ?? []).map((plugin) => {
+            const hit = conflictByName.get(plugin.name);
+            return {
+              name: plugin.name,
+              version: plugin.version ?? null,
+              installedVersion: hit?.installedVersion ?? null,
+              dest: hit?.dest ?? null,
+              sameVersion: Boolean(hit?.sameVersion),
+              exists: Boolean(hit),
+            };
+          });
+
+          if (previewRows.length) {
+            // 服务端在 dryRun 时已登记了"待决策"任务（仅当有重名），带 jobId 回来
             pendingJobId.current = preview?.jobId ?? null;
             setPendingImport({
               kind: 'bundle',
               jobId: preview?.jobId ?? null,
               file: uploaded.file,
               conflicts,
+              rows: previewRows,
               plugins: preview.plugins ?? [],
             });
             setBusy(false);
@@ -2279,19 +2353,32 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           return;
         }
 
-        // 下载好的包按普通导入走一遍：先 dryRun 看有没有重名冲突
+        // 下载好的包：先 dryRun 拿完整清单，写盘前弹确认
         const preview = await doImport({ file: fetched.file, dryRun: true });
-        const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
-        if (conflicts.length) {
+        const netConflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
+        const netConflictByName = new Map(netConflicts.map((item) => [item.name, item]));
+        const netRows = (preview?.plugins ?? []).map((plugin) => {
+          const hit = netConflictByName.get(plugin.name);
+          return {
+            name: plugin.name,
+            version: plugin.version ?? null,
+            installedVersion: hit?.installedVersion ?? null,
+            dest: hit?.dest ?? null,
+            sameVersion: Boolean(hit?.sameVersion),
+            exists: Boolean(hit),
+          };
+        });
+        if (netRows.length) {
           pendingJobId.current = preview?.jobId ?? null;
           setPendingImport({
             kind: 'bundle',
             jobId: preview?.jobId ?? null,
             file: fetched.file,
-            conflicts,
+            conflicts: netConflicts,
+            rows: netRows,
             plugins: preview.plugins ?? [],
           });
-          // 交给冲突弹窗接管，先关掉来源弹窗
+          // 交给确认弹窗接管，先关掉来源弹窗
           setNetOpen(false);
           return;
         }

@@ -173,4 +173,28 @@ test('界面源码：导入页有「安装后立即启用」勾选和启用/停�
   assert.ok(src.includes('toggleEnabled'), '应有启用/停用切换');
   assert.ok(src.includes("'/plugin-pack/enable'"), '应调用启用接口');
   assert.ok(src.includes('enable.disabledHint'), '未启用时应有明确提示');
+
+  // 默认必须是「不启用」：装完先别自动加载，由用户决定
+  assert.ok(/const installPrefs = \{ enable: false \}/.test(src), 'installPrefs 默认应为 false');
+  const at = src.indexOf('const [enableOnInstall, setEnableOnInstall] = useState(');
+  assert.ok(at > 0, '应有 enableOnInstall 状态');
+  assert.ok(
+    /useState\(false\)/.test(src.slice(at, at + 120)),
+    'enableOnInstall 默认应为 false',
+  );
+});
+
+test('界面源码：导入前一定弹确认框，列出全部插件并可覆盖/跳过', async () => {
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const src = fs.readFileSync(path.join(root, 'client.js'), 'utf8');
+
+  // 不再只在有冲突时才弹
+  assert.ok(/const rows = pending\?\.rows \?\? conflicts/.test(src), '确认框应接收全部插件行');
+  assert.ok(src.includes('conflict.titleNew'), '没有重名时也要有确认标题');
+  assert.ok(src.includes('conflict.subtitleAll'), '应显示待安装数量');
+  assert.ok(src.includes("conflict.create"), '新插件应标「新建」');
+  // 三处入口都要走确认：拖放、上传后兜底、网络安装
+  const count = (src.match(/setPendingImport\(\{/g) ?? []).length;
+  assert.ok(count >= 3, `应有至少 3 处打开确认框，实际 ${count}`);
 });
