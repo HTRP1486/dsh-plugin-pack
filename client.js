@@ -204,6 +204,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'backup.rollback': '回滚',
     'backup.rolling': '正在回滚…',
     'backup.done': '回滚完成',
+    'backup.surgicalHint': '只撤销了这次导入加的东西，你之后改的其它配置都保留着。',
+    'backup.fullHint': '这次的备份是老格式，只能整份还原 —— 导入之后改的配置可能被覆盖。',
+    'backup.preSnapshot': '回滚前的配置已另存（想反悔可从这儿取回）：',
     'backup.confirm': '确定要回滚到这份备份吗？本次导入新增的插件会被删掉。',
     'backup.createdAt': '时间',
     'backup.items': '项',
@@ -400,6 +403,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'backup.rollback': 'Roll back',
     'backup.rolling': 'Rolling back…',
     'backup.done': 'Rollback finished',
+    'backup.surgicalHint': 'Only what this import added was reverted; your later config changes are untouched.',
+    'backup.fullHint': 'This backup is an old format and can only be restored wholesale — config you changed after the import may be overwritten.',
+    'backup.preSnapshot': 'Your config before rollback was saved here (recover from it if needed): ',
     'backup.confirm': 'Roll back to this snapshot? Plugins added by that import will be removed.',
     'backup.createdAt': 'Time',
     'backup.items': 'items',
@@ -2982,8 +2988,24 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                 'div',
                 null,
                 h(Alert, { kind: 'ok' }, `${t('backup.done')} · ${t('import.restart')}`),
+                h(
+                  'div',
+                  { className: 'pp-hint', style: { marginTop: 6 } },
+                  rollbackResult.mode === 'surgical'
+                    ? t('backup.surgicalHint')
+                    : t('backup.fullHint'),
+                ),
                 rollbackResult.restored?.length
                   ? h('div', { className: 'pp-note' }, `恢复: ${rollbackResult.restored.join(', ')}`)
+                  : null,
+                // 回滚前把当时配置另存了一份，路径给出来方便反悔
+                rollbackResult.preRollbackDir
+                  ? h(
+                      'div',
+                      { className: 'pp-hint', style: { marginTop: 6 } },
+                      t('backup.preSnapshot'),
+                      h('code', { className: 'pp-mono', style: { fontSize: 11, wordBreak: 'break-all' } }, rollbackResult.preRollbackDir),
+                    )
                   : null,
               )
           : null,
