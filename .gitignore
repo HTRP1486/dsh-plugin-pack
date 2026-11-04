@@ -4,6 +4,8 @@ Thumbs.db
 *.log
 *.tgz
 *.zip
+# 测试用的整合包要进仓库，方便直接用 raw 地址测导入
+!test-assets/*.zip
 .turbo/
 coverage/
 .nyc_output/
