@@ -176,4 +176,12 @@ test('界面源码：确认框会显示降级警告与安装来源', async () =>
   assert.ok(src.includes('conflict.installedFrom'), '应显示已装来源');
   assert.ok(/compareVersions/.test(src), '客户端应有版本比较');
   assert.ok(/older: Boolean/.test(src), '预览行应计算 older');
+
+  // 拖放时现取状态：不能用打开面板时缓存的那份，否则刚装的插件会被当成新建
+  assert.ok(
+    /const freshStatus = await getStatus\(\)/.test(src),
+    '拖放时应重新拉一次 status，避免缓存导致漏判冲突',
+  );
+  // manifest 没有 plugins 清单时不要弹空框，交给服务端 dryRun
+  assert.ok(/if \(rows\.length\) \{/.test(src), 'rows 为空时应回退到上传后 dryRun');
 });

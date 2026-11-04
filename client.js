@@ -2228,7 +2228,13 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
           }
 
           if (quick && Array.isArray(quick.names) && quick.names.length) {
-            const installed = new Map((status?.plugins ?? []).map((plugin) => [plugin.name, plugin]));
+            /* 现取一次状态，不要用打开面板时缓存的那份。
+             * 用户可能刚装完插件就拖包进来，缓存里还没有那两个，
+             * 结果全部被标成「新建」——既不弹覆盖/跳过，又会重复装一遍。
+             * 服务端扫描结果有缓存（按目录 mtime 失效），所以这次调用很快。 */
+            const freshStatus = await getStatus().catch(() => null);
+            const sourcePlugins = freshStatus?.plugins ?? status?.plugins ?? [];
+            const installed = new Map(sourcePlugins.map((plugin) => [plugin.name, plugin]));
             const packPlugins = (quick.manifest?.plugins ?? []).filter(Boolean);
             const conflicts = packPlugins
               .filter((plugin) => installed.has(plugin.name))
@@ -2272,18 +2278,22 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               };
             });
 
-            setPendingImport({
-              kind: 'bundle',
-              pendingFile: file, // 还没上传，先拿着 File 对象
-              file: null,
-              conflicts: rows.filter((row) => row.exists),
-              rows,
-              plugins: packPlugins,
-              quick: true,
-            });
-            setBusy(false);
-            setPhase('');
-            return;
+            /* manifest 里没有 plugins 清单（老包或手工拼的）就别弹空框，
+             * 让下面的上传 + dryRun 用服务端的真实结果来问。 */
+            if (rows.length) {
+              setPendingImport({
+                kind: 'bundle',
+                pendingFile: file, // 还没上传，先拿着 File 对象
+                file: null,
+                conflicts: rows.filter((row) => row.exists),
+                rows,
+                plugins: packPlugins,
+                quick: true,
+              });
+              setBusy(false);
+              setPhase('');
+              return;
+            }
           }
 
           // 第二步：确认无冲突（或拿不到快速清单）才上传
