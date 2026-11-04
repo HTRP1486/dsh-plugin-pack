@@ -190,6 +190,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'conflict.titleNew': '确认导入',
     'conflict.subtitleAll': '个插件待安装',
     'conflict.create': '新建',
+    'conflict.older': '包内更旧 · 覆盖会降级',
+    'conflict.installedFrom': '已装来源',
     'conflict.subtitle': '个插件与已安装的重名，请选择如何处理：',
     'conflict.overwrite': '覆盖',
     'conflict.skip': '跳过',
@@ -389,6 +391,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'conflict.titleNew': 'Confirm import',
     'conflict.subtitleAll': 'plugins to install',
     'conflict.create': 'New',
+    'conflict.older': 'Older in bundle · overwrite downgrades',
+    'conflict.installedFrom': 'installed via',
     'conflict.subtitle': 'plugins already exist. Choose what to do:',
     'conflict.overwrite': 'Overwrite',
     'conflict.skip': 'Skip',
@@ -1365,6 +1369,27 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
    * @param {() => void} props.onCancel
    * @param {(msg: string) => string} props.t
    */
+  /** 比较两个版本号：a>b → 正数。只认三段数字，够判断"包里是否更旧"。 */
+  function compareVersions(a, b) {
+    const parse = (text) =>
+      String(text ?? '')
+        .trim()
+        .replace(/^v/i, '')
+        .split('-')[0]
+        .split('.')
+        .map((part) => {
+          const n = Number.parseInt(part.replace(/[^0-9].*$/, ''), 10);
+          return Number.isFinite(n) ? n : 0;
+        });
+    const left = parse(a);
+    const right = parse(b);
+    for (let i = 0; i < 3; i += 1) {
+      const diff = (left[i] ?? 0) - (right[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  }
+
   /**
    * 「添加整合包」弹窗。
    *
@@ -1705,6 +1730,31 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                     : h('span', { className: 'pp-ver' }, item.version),
                   item.exists && item.sameVersion
                     ? h('span', { className: 'pp-ver' }, t('conflict.sameVersion'))
+                    : null,
+                  // 包内版本更旧：覆盖等于降级，必须显眼
+                  item.exists && item.older
+                    ? h(
+                        'span',
+                        {
+                          className: 'pp-ver',
+                          style: {
+                            color: 'var(--dsw-alias-state-warning-primary,#b45309)',
+                            borderColor: 'color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d97706) 45%,transparent)',
+                          },
+                        },
+                        t('conflict.older'),
+                      )
+                    : null,
+                  // 已装来源不是 local-plugins 时说明一下（覆盖会改掉原来的安装方式）
+                  item.installSource && item.installSource !== 'local-plugins'
+                    ? h(
+                        'span',
+                        { className: 'pp-ver' },
+                        `${t('conflict.installedFrom')} ${
+                          { npm: 'npm', link: 'link:', remote: 'git/url', unknown: '?' }[item.installSource] ??
+                          item.installSource
+                        }`,
+                      )
                     : null,
                 ),
                 item.dest ? h('div', { className: 'pp-meta pp-mono', style: { fontSize: 11 } }, item.dest) : null,
@@ -2216,6 +2266,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                 dest: hit?.dir ?? null,
                 bytes: plugin.bytes ?? null,
                 sameVersion: (hit?.version ?? null) === (plugin.version ?? null),
+                // 包内版本比已装的更旧 → 覆盖等于降级，要显式标出来
+                older: Boolean(hit?.version && plugin.version && compareVersions(hit.version, plugin.version) > 0),
                 exists: Boolean(hit),
               };
             });
@@ -2252,6 +2304,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
               installedVersion: hit?.installedVersion ?? null,
               dest: hit?.dest ?? null,
               sameVersion: Boolean(hit?.sameVersion),
+              older: Boolean(hit?.older),
+              installSource: hit?.installSource ?? null,
               exists: Boolean(hit),
             };
           });
@@ -2371,6 +2425,8 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
             installedVersion: hit?.installedVersion ?? null,
             dest: hit?.dest ?? null,
             sameVersion: Boolean(hit?.sameVersion),
+            older: Boolean(hit?.older),
+            installSource: hit?.installSource ?? null,
             exists: Boolean(hit),
           };
         });
