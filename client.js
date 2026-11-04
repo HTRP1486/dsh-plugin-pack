@@ -134,6 +134,14 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'net.warnBody': '整合包会覆盖已装插件的文件与配置，来源不明的包可能损坏 DeepSeek Harness。安装前会先列出重名插件，由你逐个决定覆盖还是跳过。',
     'net.done': '下载完成，已导入',
     'net.hintTitle': '可以这样处理：',
+    'enable.onInstall': '安装后立即启用',
+    'enable.installedTitle': '已安装',
+    'enable.enabled': '已启用',
+    'enable.disabled': '未启用',
+    'enable.enable': '启用',
+    'enable.disable': '停用',
+    'enable.enabledHint': '重启 dsh 后会加载这些插件。',
+    'enable.disabledHint': '文件已经装好，但不会加载。想用的时候点「启用」，重启 dsh 后生效。',
     'import.pageTitle': '导入插件整合包',
     'drop.title': '把 zip / tgz 或插件文件夹拖到这里',
     'drop.release': '松手就导入',
@@ -320,6 +328,14 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     'net.warnBody': 'A bundle overwrites installed plugins and their config. Untrusted sources can damage DeepSeek Harness. You will be asked per-plugin whether to overwrite or skip.',
     'net.done': 'Downloaded and imported',
     'net.hintTitle': 'What you can do: ',
+    'enable.onInstall': 'Enable right after install',
+    'enable.installedTitle': 'Installed',
+    'enable.enabled': 'Enabled',
+    'enable.disabled': 'Not enabled',
+    'enable.enable': 'Enable',
+    'enable.disable': 'Disable',
+    'enable.enabledHint': 'These plugins will load after you restart dsh.',
+    'enable.disabledHint': 'Files are installed but will not load. Click Enable when you need them, then restart dsh.',
     'import.pageTitle': 'Import plugin bundle',
     'drop.title': 'Drop a zip / tgz or plugin folder here',
     'drop.release': 'Release to import',
@@ -528,9 +544,19 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     }
   }
 
+  /* 安装偏好：由界面上的「安装后立即启用」勾选同步过来。
+   * 放这里是因为 doImport 在接口层、拿不到组件 state；
+   * 用一个普通对象透传，避免把选项硬编码进每个调用点。 */
+  const installPrefs = { enable: true };
+
   const getStatus = () => api('/plugin-pack/status');
   const doExport = (body) => api('/plugin-pack/export', { method: 'POST', body: JSON.stringify(body) });
-  const doImport = (body) => api('/plugin-pack/import', { method: 'POST', body: JSON.stringify(body) });
+  const doImport = (body) =>
+    api('/plugin-pack/import', {
+      method: 'POST',
+      // 显式传 enable；body 里如果自己带了 enable 就以 body 为准
+      body: JSON.stringify({ enable: installPrefs.enable, ...body }),
+    });
   // inspect 接口保留在服务端（工具/CLI 会用），界面这层不再需要它
   const doRollback = (backup) => api('/plugin-pack/rollback', { method: 'POST', body: JSON.stringify({ backup }) });
   const doBrowse = (dir, options = {}) =>
@@ -547,6 +573,9 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     api('/plugin-pack/waiting/cancel', { method: 'POST', body: JSON.stringify({ id, reason }) });
   /** 从网络来源（GitHub / npm / 直链）拉整合包。 */
   const fetchBundle = (body) => api('/plugin-pack/fetch-bundle', { method: 'POST', body: JSON.stringify(body) });
+  /** 启用 / 停用已装插件（装完后用户自己选的那个开关）。 */
+  const setEnabled = (names, enabled) =>
+    api('/plugin-pack/enable', { method: 'POST', body: JSON.stringify({ names, enabled }) });
 
   /* ------------------------- 浏览器端读 zip 头部 ------------------------- */
 
@@ -1343,7 +1372,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
    * @param {() => void} props.onClose
    * @param {(key: string) => string} props.t
    */
-  function AddBundleDialog({ open, value, onChange, result, busy, phase, onInstall, onClose, t }) {
+  function AddBundleDialog({ open, value, onChange, result, busy, phase, onInstall, onClose, t, enableOnInstall, onToggleEnable }) {
     const [showExamples, setShowExamples] = useState(false);
 
     // Esc 关闭
@@ -1514,6 +1543,22 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
                   ),
             )
           : null,
+
+        // 安装后是否立即启用（和导入页那个勾选是同一个状态）
+        h(
+          'label',
+          {
+            className: 'pp-hint',
+            style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, cursor: busy ? 'default' : 'pointer' },
+          },
+          h('input', {
+            type: 'checkbox',
+            checked: enableOnInstall !== false,
+            disabled: busy,
+            onChange: (event) => onToggleEnable?.(event.target.checked),
+          }),
+          t('enable.onInstall'),
+        ),
 
         // 大按钮（对齐自带的整宽「安装」）
         h(
@@ -1856,6 +1901,10 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
     const [netResult, setNetResult] = useState(null);
     /** 「添加整合包」弹窗是否打开。 */
     const [netOpen, setNetOpen] = useState(false);
+    /** 安装后是否立即启用（勾选框）。关掉 → 只装文件，不进 bundles。 */
+    const [enableOnInstall, setEnableOnInstall] = useState(true);
+    /** 刚装完的插件及其启用状态，用于装完后再切换。 */
+    const [enablePrompt, setEnablePrompt] = useState(null);
     /** 后台任务列表：切走画面回来靠它恢复 */
     const [jobs, setJobs] = useState([]);
     /** 体积上限（MiB），0 = 不限制。默认跟着服务端配置走。 */
@@ -2017,6 +2066,43 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       }
     };
 
+    /**
+     * 记下这次装完的插件和它的启用状态，供界面上的「启用 / 停用」切换。
+     *
+     * 装完不等于启用：enable=false 时文件在磁盘上、依赖也写好了，
+     * 但不在 dsh.profile.bundles 里，dsh 启动时不会加载它。
+     */
+    const rememberEnableState = (result) => {
+      if (!result?.ok || result.dryRun) {
+        setEnablePrompt(null);
+        return;
+      }
+      const names = (result.plugins ?? [])
+        .filter((plugin) => plugin && plugin.action !== 'skipped')
+        .map((plugin) => plugin.name)
+        .filter(Boolean);
+      if (!names.length) {
+        setEnablePrompt(null);
+        return;
+      }
+      setEnablePrompt({ names, enabled: result.enabled !== false });
+    };
+
+    /** 点「启用」或「停用」：只动 bundles，不动文件。 */
+    const toggleEnabled = async (enabled) => {
+      if (!enablePrompt?.names?.length) return;
+      setBusy(true);
+      try {
+        const data = await setEnabled(enablePrompt.names, enabled);
+        setEnablePrompt({ ...enablePrompt, enabled: Boolean(data?.enabled) });
+        await load();
+      } catch (err) {
+        setImportResult({ error: String(err?.message ?? err) });
+      } finally {
+        setBusy(false);
+      }
+    };
+
     /** 「本地导入插件」：把一个已存在的插件目录接进当前 profile。 */
     /** 拖放进来：zip/tgz 走整合包导入，目录走本地插件导入。 */
     const runDrop = async (file) => {
@@ -2114,6 +2200,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
             linkNodeModules: true,
           });
           setImportResult(result);
+          rememberEnableState(result);
           await load();
           await refreshJobs();
         } else {
@@ -2184,6 +2271,7 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
             plugins: fetched.plugins,
           });
           setImportResult(result);
+          rememberEnableState(result);
           await load();
           await refreshJobs();
           // 装完关掉弹窗，回到列表看结果
@@ -2603,6 +2691,81 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
       null,
       h(DropZone, { onFile: runDrop, busy, dropRef: lastDrop, phase }),
 
+      /* 安装后是否立即启用。
+       * 勾着 → 装进 dsh.profile.bundles，重启就加载；
+       * 取消 → 只装文件与依赖，重启也不加载，之后想用再点「启用」。 */
+      h(
+        'label',
+        {
+          className: 'pp-hint',
+          style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, cursor: busy ? 'default' : 'pointer' },
+        },
+        h('input', {
+          type: 'checkbox',
+          checked: enableOnInstall,
+          disabled: busy,
+          onChange: (event) => {
+            const next = event.target.checked;
+            installPrefs.enable = next;
+            setEnableOnInstall(next);
+          },
+        }),
+        t('enable.onInstall'),
+      ),
+
+      /* 装完之后的选择：立即启用 / 不启用。
+       * 停用只是把它从 bundles 里拿掉，文件还在，随时能再打开。 */
+      enablePrompt
+        ? h(
+            'div',
+            { className: 'pp-card', style: { marginTop: 12 } },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+              h(
+                'span',
+                { style: { fontSize: 13, fontWeight: 500 } },
+                `${t('enable.installedTitle')} · ${enablePrompt.names.length} ${t('plugins')}`,
+              ),
+              h(
+                'span',
+                {
+                  className: 'pp-pill',
+                  style: {
+                    background: enablePrompt.enabled
+                      ? 'color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 14%,transparent)'
+                      : 'color-mix(in srgb,var(--dsw-alias-label-secondary,#6b7280) 14%,transparent)',
+                    color: enablePrompt.enabled
+                      ? 'var(--dsw-alias-state-success-primary,#15803d)'
+                      : 'var(--dsw-alias-label-secondary,#6b7280)',
+                  },
+                },
+                enablePrompt.enabled ? t('enable.enabled') : t('enable.disabled'),
+              ),
+              h('span', { style: { flex: 1 } }),
+              h(
+                'button',
+                {
+                  className: 'pp-btn sm',
+                  disabled: busy,
+                  onClick: () => toggleEnabled(!enablePrompt.enabled),
+                },
+                enablePrompt.enabled ? t('enable.disable') : t('enable.enable'),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'pp-hint', style: { marginTop: 6 } },
+              enablePrompt.enabled ? t('enable.enabledHint') : t('enable.disabledHint'),
+            ),
+            h(
+              'div',
+              { className: 'pp-hint pp-mono', style: { marginTop: 4, fontSize: 11 } },
+              enablePrompt.names.join(', '),
+            ),
+          )
+        : null,
+
       // 后台任务：切走画面回来能看到刚才那次导入的结果
       h(JobList, { jobs, onClear: clearJobHistory, t }),
 
@@ -2910,6 +3073,11 @@ window.__ModuleLoader__.load({ id: 'dsh-plugin-pack', factory: (require) => {
         phase,
         onInstall: runNetworkInstall,
         onClose: () => setNetOpen(false),
+        enableOnInstall,
+        onToggleEnable: (next) => {
+          installPrefs.enable = next;
+          setEnableOnInstall(next);
+        },
         t,
       }),
       // 重名冲突弹窗：叠在最上层

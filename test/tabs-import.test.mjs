@@ -232,9 +232,10 @@ test('导入页：拖拽框 + 右上角「添加整合包」按钮，无旧页�
   assert.equal(importText.includes('import.link'), false, '不该再有「建链接」勾选');
   assert.equal(importText.includes('import.run'), false, '不该再有「开始导入」按钮');
 
-  // 弹窗关着时，页面上只该有拖拽框内部那一个隐藏 file input
+  // 弹窗关着时：拖拽框的隐藏 file input + 「安装后立即启用」勾选框
   let inputs = 0;
   let textInputs = 0;
+  let checkboxes = 0;
   const walk = (node) => {
     if (node == null || typeof node !== 'object') return;
     if (Array.isArray(node)) {
@@ -243,13 +244,16 @@ test('导入页：拖拽框 + 右上角「添加整合包」按钮，无旧页�
     }
     if (node.type === 'input' || node.type === 'select') {
       inputs += 1;
-      if (String(node.props?.type ?? '') === 'text') textInputs += 1;
+      const type = String(node.props?.type ?? '');
+      if (type === 'text') textInputs += 1;
+      if (type === 'checkbox') checkboxes += 1;
     }
     for (const child of node.children ?? []) walk(child);
   };
   walk(tree);
-  assert.equal(inputs, 1, `弹窗关闭时只该有隐藏 file input，实际 ${inputs}`);
+  assert.equal(inputs, 2, `应有隐藏 file input + 启用勾选框，实际 ${inputs}`);
   assert.equal(textInputs, 0, '弹窗关闭时不该有文本框');
+  assert.equal(checkboxes, 1, '应有一个「安装后立即启用」勾选框');
 
   // 导出页：手动范围切换已删除，改为按勾选数量自动判断
   const exportTab = registered.find((item) => item.spec.id === 'plugin-pack-export');
