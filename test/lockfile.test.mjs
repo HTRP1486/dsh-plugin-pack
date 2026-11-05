@@ -19,7 +19,94 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { syncLockfile, checkLockfile } from '../lib/lockfile.js';
+import { syncLockfile, checkLockfile, lockfileStatus } from '../lib/lockfile.js';
+
+/** 造一个最小 pnpm 锁文件（只含 importers 下 "." 的依赖段）。 */
+function writeLock(dir, deps) {
+  const body = Object.entries(deps)
+    .map(([name, spec]) => `      ${name}:\n        specifier: ${spec}\n        version: ${spec}`)
+    .join('\n');
+  fs.writeFileSync(
+    path.join(dir, 'pnpm-lock.yaml'),
+    ['lockfileVersion: 9.0', '', 'importers:', '', '  .:', '', '    dependencies:', body || '      {}', ''].join('\n'),
+  );
+}
+
+function writePkg(dir, deps) {
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ name: 'p', private: true, dependencies: deps }, null, 2),
+  );
+}
+
+test('lockfileStatus：一致时报 outdated=false', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-pp-lock-status-a');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  writePkg(dir, { 'dsh-pet': 'link:./local-plugins/dsh-pet' });
+  writeLock(dir, { 'dsh-pet': 'link:./local-plugins/dsh-pet' });
+
+  const s = lockfileStatus(dir);
+  assert.equal(s.ok, true);
+  assert.equal(s.outdated, false);
+  assert.deepEqual(s.missing, []);
+  assert.deepEqual(s.extra, []);
+});
+
+test('lockfileStatus：package.json 多了依赖 → missing', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-pp-lock-status-b');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  writePkg(dir, { 'dsh-pet': 'link:./local-plugins/dsh-pet', 'dsh-new': 'link:./local-plugins/dsh-new' });
+  writeLock(dir, { 'dsh-pet': 'link:./local-plugins/dsh-pet' });
+
+  const s = lockfileStatus(dir);
+  assert.equal(s.outdated, true);
+  assert.deepEqual(s.missing, ['dsh-new']);
+});
+
+test('lockfileStatus：锁文件多了依赖 → extra（卸载后典型状态）', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-pp-lock-status-c');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  writePkg(dir, {});
+  writeLock(dir, { 'dsh-gone': 'link:./local-plugins/dsh-gone' });
+
+  const s = lockfileStatus(dir);
+  assert.equal(s.outdated, true);
+  assert.deepEqual(s.extra, ['dsh-gone']);
+});
+
+test('lockfileStatus：版本变了 → changed', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-pp-lock-status-d');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  writePkg(dir, { 'dsh-ops': '^0.5.0' });
+  writeLock(dir, { 'dsh-ops': '^0.4.1' });
+
+  const s = lockfileStatus(dir);
+  assert.equal(s.outdated, true);
+  assert.deepEqual(s.changed, ['dsh-ops']);
+});
+
+test('lockfileStatus：文件缺失时不抛错', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-pp-lock-status-e');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const s = lockfileStatus(dir);
+  assert.equal(s.ok, false);
+  assert.equal(s.outdated, false);
+});
+
+test('源码：status 会报锁文件状态并后台自愈', async () => {
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const src = fs.readFileSync(path.join(root, 'lib', 'server.js'), 'utf8');
+
+  assert.ok(src.includes('lockfileOutdated'), 'status 应报锁文件是否过期');
+  assert.ok(src.includes('autoHealLockfile'), '应在发现过期时后台自愈');
+  assert.ok(/LOCK_HEAL_INTERVAL_MS/.test(src), '自愈要节流，不能每次刷新都跑 pnpm');
+});
 
 const TMP = path.join(os.tmpdir(), 'dsh-pp-lockfile');
 

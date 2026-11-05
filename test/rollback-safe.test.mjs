@@ -68,7 +68,7 @@ test('回滚后：用户后加的 API 密钥还在', async () => {
   assert.equal(rolled.mode, 'surgical', '应走精准回滚');
 });
 
-test('回滚后：导入追加的那些 patch 行被移除', async () => {
+test('回滚后：导入追加的那些 patch 行被移除（没追加时不动文件）', async () => {
   const bundle = await makeBundle();
   const profile = makeProfile('remove-added');
 
@@ -77,14 +77,24 @@ test('回滚后：导入追加的那些 patch 行被移除', async () => {
   const withImport = fs.readFileSync(patchFile, 'utf8');
   assert.ok(withImport.length > 0);
 
+  // 这两个插件在导出时未带 patch 行的话，导入不会追加任何内容 ——
+  // 这时回滚**必须完全不碰文件**（碰了就会误删用户的东西）。
+  const appendedNothing = withImport === fs.readFileSync(path.join(profile, 'cordis.patch.yml'), 'utf8');
+
   rollbackImport({ profileDir: profile, backup: imported.backup });
   const after = fs.readFileSync(patchFile, 'utf8');
 
   // 用户原本的那行要在
-  assert.match(after, /my-llm/);
-  // 导入时追加的（带 plugin-pack 标记的块）要没了
-  assert.equal(/plugin-pack \d{8}-\d{6}/.test(after), false, '导入追加的块应被摘掉');
-  assert.ok(after.length < withImport.length, '文件应变短');
+  assert.match(after, /my-llm/, '用户原有的配置行必须保留');
+  assert.match(after, /sk-KEEP-ME/, '用户原有的密钥必须保留');
+
+  if (appendedNothing && !/plugin-pack \d{8}-\d{6}/.test(withImport)) {
+    assert.equal(after, withImport, '导入没追加过内容时，回滚不该改动这个文件');
+  } else {
+    // 导入时追加了（带 plugin-pack 标记的块）→ 回滚要摘掉
+    assert.equal(/plugin-pack \d{8}-\d{6}/.test(after), false, '导入追加的块应被摘掉');
+    assert.ok(after.length < withImport.length, '文件应变短');
+  }
 });
 
 test('回滚后：依赖与 bundles 只撤销本次导入的', async () => {
