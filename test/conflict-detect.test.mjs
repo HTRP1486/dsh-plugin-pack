@@ -3,12 +3,13 @@
  *
  * 老实现只看 `local-plugins/<segment>` 在不在。如果原插件是
  * npm / github / 绝对路径 link 装的（文件在 node_modules 里），
- * 它会被当成「新建」：
- *   - 重复装一份到 local-plugins
- *   - 把 dependencies 里的 `^0.4.1` / `github:...` 覆盖成 `link:`
- *   - 用户选「跳过」也不生效（只有 exists 的项才会看 decisions）
+ * 它会被当成「新建」：重复装一份、把 dependencies 覆盖成 link:、
+ * 用户选「跳过」也不生效。
  *
- * 另外还要求：整合包里的版本比已装的更旧时，必须能被识别出来（覆盖=降级）。
+ * 另外：整合包里的版本比已装更旧时必须能识别（覆盖 = 降级）。
+ *
+ * 注意：这里不写死插件名 —— 不同机器 profile 里的插件不一样，
+ * 写死会让测试在别人机器上必挂。改成从当前 profile 扫描里挑。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,10 +19,25 @@ import { test } from 'node:test';
 
 import { importBundle, compareVersions } from '../lib/import.js';
 import { exportBundle } from '../lib/export.js';
+import { scanProfile } from '../lib/scan.js';
 
 const TMP = path.join(os.tmpdir(), 'dsh-pp-conflict-detect');
 
-/** 造 profile，可预置一个"以某种方式已安装"的插件。 */
+/** 从当前 profile 里挑两个可以导出、且名字不带 scope 的插件。 */
+async function pickTargets() {
+  try {
+    const scan = await scanProfile({});
+    const names = (scan.plugins ?? [])
+      .map((plugin) => plugin.name)
+      .filter((name) => typeof name === 'string' && name && !name.startsWith('@'));
+    const unique = [...new Set(names)];
+    return { target: unique[0] ?? null, other: unique[1] ?? null };
+  } catch {
+    return { target: null, other: null };
+  }
+}
+
+/** 造 profile，可预置一个"以 npm 方式已安装"的插件。 */
 function makeProfile(name, { preset = null } = {}) {
   const dir = path.join(TMP, name);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -41,7 +57,7 @@ function makeProfile(name, { preset = null } = {}) {
     );
     fs.writeFileSync(path.join(pkgDir, 'index.js'), 'export default 1;');
     dependencies[preset.name] = preset.spec;
-    if (preset.inBundles !== false) bundles.push(preset.name);
+    bundles.push(preset.name);
   }
 
   fs.writeFileSync(
@@ -52,19 +68,23 @@ function makeProfile(name, { preset = null } = {}) {
   return dir;
 }
 
-/** 导一个包含插件 X 的整合包（多插件 → zip）。 */
+/** 导一个含指定插件的整合包（≥2 个 → zip）。 */
 async function makeBundle(include) {
   return exportBundle({ include, out: `${TMP}\\`, maxBytes: 0 });
 }
 
-test('插件是 npm 装的（node_modules 里）→ 必须识别为已存在', async () => {
-  const bundle = await makeBundle(['dsh-ops', 'dsh-plugin-pack']);
+const { target: TARGET, other: OTHER } = await pickTargets();
+const BUNDLE = TARGET && OTHER ? [TARGET, OTHER] : null;
+
+test('插件是 npm 装的（node_modules 里）→ 必须识别为已存在', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('npm-installed', {
-    preset: { name: 'dsh-ops', installedVersion: '9.9.9', spec: '^9.9.9' },
+    preset: { name: TARGET, installedVersion: '9.9.9', spec: '^9.9.9' },
   });
 
   const preview = importBundle({ file: bundle.file, profileDir: profile, dryRun: true });
-  const conflict = preview.conflicts.find((item) => item.name === 'dsh-ops');
+  const conflict = preview.conflicts.find((item) => item.name === TARGET);
 
   assert.ok(conflict, 'npm 装的插件必须被识别为冲突，而不是新建');
   assert.equal(conflict.installedVersion, '9.9.9');
@@ -72,87 +92,96 @@ test('插件是 npm 装的（node_modules 里）→ 必须识别为已存在', a
   assert.equal(conflict.installedSpec, '^9.9.9');
 });
 
-test('选「跳过」时，npm 装的插件不被改动', async () => {
-  const bundle = await makeBundle(['dsh-ops', 'dsh-plugin-pack']);
+test('选「跳过」时，npm 装的插件不被改动', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('skip-npm', {
-    preset: { name: 'dsh-ops', installedVersion: '9.9.9', spec: '^9.9.9' },
+    preset: { name: TARGET, installedVersion: '9.9.9', spec: '^9.9.9' },
   });
 
   const result = importBundle({
     file: bundle.file,
     profileDir: profile,
-    decisions: { 'dsh-ops': 'skip' },
+    decisions: { [TARGET]: 'skip' },
   });
 
   const pkg = JSON.parse(fs.readFileSync(path.join(profile, 'package.json'), 'utf8'));
-  assert.equal(pkg.dependencies['dsh-ops'], '^9.9.9', '跳过时不该把 ^9.9.9 覆盖成 link:');
+  assert.equal(pkg.dependencies[TARGET], '^9.9.9', '跳过时不该把 ^9.9.9 覆盖成 link:');
+
+  const segment = String(TARGET).split('/').pop();
   assert.equal(
-    fs.existsSync(path.join(profile, 'local-plugins', 'dsh-ops')),
+    fs.existsSync(path.join(profile, 'local-plugins', segment)),
     false,
     '跳过时不该往 local-plugins 里塞一份',
   );
 
-  const skipped = (result.plugins ?? []).find((item) => item.name === 'dsh-ops');
+  const skipped = (result.plugins ?? []).find((item) => item.name === TARGET);
   assert.equal(skipped?.action, 'skipped', '结果里应记为 skipped');
 });
 
-test('选「覆盖」时，明确改成 link: 并记录改前值（可回滚）', async () => {
-  const bundle = await makeBundle(['dsh-ops', 'dsh-plugin-pack']);
+test('选「覆盖」时，明确改成 link: 并记录改前值（可回滚）', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('overwrite-npm', {
-    preset: { name: 'dsh-ops', installedVersion: '9.9.9', spec: '^9.9.9' },
+    preset: { name: TARGET, installedVersion: '9.9.9', spec: '^9.9.9' },
   });
 
   const result = importBundle({
     file: bundle.file,
     profileDir: profile,
-    decisions: { 'dsh-ops': 'overwrite' },
+    decisions: { [TARGET]: 'overwrite' },
   });
 
   const pkg = JSON.parse(fs.readFileSync(path.join(profile, 'package.json'), 'utf8'));
-  assert.equal(pkg.dependencies['dsh-ops'], 'link:./local-plugins/dsh-ops', '覆盖后应是 link');
+  const segment = String(TARGET).split('/').pop();
+  const expected = `link:./local-plugins/${segment}`;
+  assert.equal(pkg.dependencies[TARGET], expected, '覆盖后应是 link');
 
   // record 里要记下改前值，回滚才能还原成 ^9.9.9
   const record = JSON.parse(fs.readFileSync(path.join(result.backup, 'record.json'), 'utf8'));
-  assert.equal(record.pkgDepsBefore['dsh-ops'].before, '^9.9.9');
-  assert.equal(record.pkgDepsBefore['dsh-ops'].after, 'link:./local-plugins/dsh-ops');
+  assert.equal(record.pkgDepsBefore[TARGET].before, '^9.9.9');
+  assert.equal(record.pkgDepsBefore[TARGET].after, expected);
 });
 
-test('整合包里的版本更旧 → 标记 older 并给出警告', async () => {
-  const bundle = await makeBundle(['dsh-ops', 'dsh-plugin-pack']);
+test('整合包里的版本更旧 → 标记 older 并给出警告', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('older', {
-    preset: { name: 'dsh-ops', installedVersion: '99.0.0', spec: '^99.0.0' },
+    preset: { name: TARGET, installedVersion: '99.0.0', spec: '^99.0.0' },
   });
 
   const preview = importBundle({ file: bundle.file, profileDir: profile, dryRun: true });
-  const conflict = preview.conflicts.find((item) => item.name === 'dsh-ops');
+  const conflict = preview.conflicts.find((item) => item.name === TARGET);
 
   assert.equal(conflict.older, true, '包内版本更旧应被标出');
   assert.ok(
-    preview.warnings.some((text) => /dsh-ops/.test(text) && /旧版本|降级/.test(text)),
+    preview.warnings.some((text) => new RegExp(TARGET).test(text) && /旧版本|降级/.test(text)),
     `应有一条降级警告，实际: ${JSON.stringify(preview.warnings)}`,
   );
 });
 
-test('包内版本更新 → 不标记 older', async () => {
-  const bundle = await makeBundle(['dsh-ops', 'dsh-plugin-pack']);
+test('包内版本更新 → 不标记 older', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('newer', {
-    preset: { name: 'dsh-ops', installedVersion: '0.0.1', spec: '0.0.1' },
+    preset: { name: TARGET, installedVersion: '0.0.1', spec: '0.0.1' },
   });
 
   const preview = importBundle({ file: bundle.file, profileDir: profile, dryRun: true });
-  const conflict = preview.conflicts.find((item) => item.name === 'dsh-ops');
+  const conflict = preview.conflicts.find((item) => item.name === TARGET);
   assert.equal(conflict.older, false);
 });
 
-test('本地插件（local-plugins 里）仍然照常识别', async () => {
-  const bundle = await makeBundle(['dsh-plugin-pack', 'dsh-one-click-polish']);
+test('本地插件（local-plugins 里）仍然照常识别', async (t) => {
+  if (!BUNDLE) return t.skip('当前 profile 里可导出的插件不足 2 个');
+  const bundle = await makeBundle(BUNDLE);
   const profile = makeProfile('local-installed');
 
-  // 先装一次，让 local-plugins/dsh-plugin-pack 存在
+  // 先装一次，让 local-plugins 下出现同名目录
   importBundle({ file: bundle.file, profileDir: profile });
 
   const preview = importBundle({ file: bundle.file, profileDir: profile, dryRun: true });
-  const conflict = preview.conflicts.find((item) => item.name === 'dsh-plugin-pack');
+  const conflict = preview.conflicts.find((item) => item.name === TARGET);
   assert.ok(conflict, '本地安装的也要识别');
   assert.equal(conflict.installSource, 'local-plugins');
   assert.equal(conflict.sameVersion, true, '同版本应标出来');
@@ -182,6 +211,15 @@ test('界面源码：确认框会显示降级警告与安装来源', async () =>
     /const freshStatus = await getStatus\(\)/.test(src),
     '拖放时应重新拉一次 status，避免缓存导致漏判冲突',
   );
-  // manifest 没有 plugins 清单时不要弹空框，交给服务端 dryRun
   assert.ok(/if \(rows\.length\) \{/.test(src), 'rows 为空时应回退到上传后 dryRun');
+});
+
+test('清单声明了 DSH 兼容范围（升级不再被停用）', async () => {
+  const { fileURLToPath } = await import('node:url');
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+  assert.ok(pkg.engines?.dsh, 'package.json 必须有 engines.dsh');
+  // DSH 的判定规则：预发布版本参与范围匹配，所以 >=0.2.0 能覆盖 0.2.x-rc.*
+  assert.match(String(pkg.engines.dsh), />=0\.2\.0/);
 });
